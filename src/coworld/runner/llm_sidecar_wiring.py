@@ -138,6 +138,7 @@ def build_llm_sidecar(
     llm_debug_body_s3_bucket: str | None = None,
     openrouter_capture_payloads: bool = True,
     spend_limit_usd: str | None = None,
+    game_spend_limit_usd: str | None = None,
     player_slot_count: int | None = None,
     openrouter_key_secret_name: str | None,
     openrouter_model_allowlist: list[str] | None = None,
@@ -278,6 +279,11 @@ def build_llm_sidecar(
             *(
                 [client.V1EnvVar(name="LLM_SIDECAR_SPEND_LIMIT_USD", value=spend_limit_usd)]
                 if spend_limit_usd is not None
+                else []
+            ),
+            *(
+                [client.V1EnvVar(name="LLM_SIDECAR_GAME_SPEND_LIMIT_USD", value=game_spend_limit_usd)]
+                if game_spend_limit_usd is not None
                 else []
             ),
             # Self-provide the full IRSA web-identity env (see the app_backend mirror): botocore's

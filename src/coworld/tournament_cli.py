@@ -209,6 +209,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
         help=(
             "Create a hosted Experience Request from JSON. Set episode_player_llm_spend_limit_usd "
             "for an approximate per-episode player LLM spend cap."
+            " Set episode_game_llm_spend_limit_usd separately for game-owned model calls."
         ),
     )
     def xp_request_create(

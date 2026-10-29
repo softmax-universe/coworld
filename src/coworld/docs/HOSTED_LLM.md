@@ -399,6 +399,13 @@ rejecting the first call. A blank limit leaves access unlimited. The league's li
 league — tournament rounds, league-bound experience requests, and lobbies alike. A requester limit also caps league-less
 experience requests.
 
+For experience requests, set `episode_game_llm_spend_limit_usd` separately to cap the game's own model calls, such as
+environment judgments. These calls retain game attribution. The player limit still applies independently to player pods
+and delegated player slots. Omitting the game limit keeps game-owned calls uncapped; zero rejects their first call. The
+limit stops new calls after recorded provider spend reaches it. In-flight calls can exceed the configured amount, so
+reserve room for the game's maximum concurrent requests. The game limit is stored with the request and reused on
+execution retries. It does not change the judge model, decoder or prompts.
+
 Hosted play and replay have no per-session spend cap. They use a separate capped key pool, so another session can
 exhaust the shared key without affecting episode keys. Persistent league runtimes use a third pool with 31-day keys and
 no key or session dollar cap. The persistent admission budget covers compute; it is not an LLM spend limit.

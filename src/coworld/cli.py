@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 import webbrowser
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2101,18 +2101,10 @@ def optimize(
     """Install and launch the local optimizer workbench, optionally preloaded with a Coworld."""
     install_root = optimizer_dir.resolve() if optimizer_dir is not None else None
     try:
-        if manifest_uri is None:
-            run_optimizer_session(
-                None,
-                port=port,
-                open_browser=open_browser,
-                refresh=refresh,
-                optimizer_repo=optimizer_repo,
-                optimizer_ref=optimizer_ref,
-                install_root=install_root,
-            )
-            return
-        with _materialized_manifest_path(manifest_uri, server=server) as manifest_path:
+        manifest_context = (
+            nullcontext(None) if manifest_uri is None else _materialized_manifest_path(manifest_uri, server=server)
+        )
+        with manifest_context as manifest_path:
             run_optimizer_session(
                 manifest_path,
                 port=port,

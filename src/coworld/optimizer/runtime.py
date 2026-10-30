@@ -45,38 +45,6 @@ class OptimizerContext:
     coworld_id: str | None
 
 
-@dataclass(frozen=True)
-class OptimizerOpenResult:
-    game_id: str
-    detail_url: str
-
-
-def parse_github_repo(url: str, *, default_ref: str = DEFAULT_OPTIMIZER_REF) -> tuple[str, str, str]:
-    """Parse a GitHub URL into (clone_url, ref, slug).
-
-    Supports:
-    - https://github.com/Org/repo
-    - https://github.com/Org/repo.git
-    - https://github.com/Org/repo/tree/<ref>
-    - https://github.com/Org/repo/tree/<ref>/sub/path  (subpath ignored)
-    """
-    parsed = urlparse(url)
-    if parsed.netloc.lower() not in ("github.com", "www.github.com"):
-        raise OptimizerSetupError(f"Only GitHub repository URLs are supported for the optimizer, got: {url}")
-    parts = [segment for segment in parsed.path.split("/") if segment]
-    if len(parts) < 2:
-        raise OptimizerSetupError(f"Could not parse owner/repo from optimizer URL: {url}")
-    owner, repo = parts[0], parts[1]
-    if repo.endswith(".git"):
-        repo = repo[: -len(".git")]
-    ref = default_ref
-    if len(parts) >= 4 and parts[2] == "tree":
-        ref = parts[3]
-    clone_url = f"https://github.com/{owner}/{repo}.git"
-    slug = f"{owner.lower()}-{repo.lower()}"
-    return clone_url, ref, slug
-
-
 def resolve_optimizer_repository(
     manifest_path: Path | None,
     *,
@@ -85,39 +53,35 @@ def resolve_optimizer_repository(
 ) -> OptimizerRepoSpec:
     repo_url = override_repo
     if repo_url is None and manifest_path is not None:
-        repo_url = _manifest_optimizer_repository_url(manifest_path)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise OptimizerSetupError(f"Could not read manifest {manifest_path}: {exc}") from exc
+        entries = manifest.get("optimizer") if isinstance(manifest, dict) else None
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("repository_url"):
+                    repo_url = str(entry["repository_url"])
+                    break
     if repo_url is None:
         repo_url = DEFAULT_OPTIMIZER_REPO
-    clone_url, ref, slug = parse_github_repo(repo_url)
+    parsed = urlparse(repo_url)
+    if parsed.netloc.lower() not in ("github.com", "www.github.com"):
+        raise OptimizerSetupError(f"Only GitHub repository URLs are supported for the optimizer, got: {repo_url}")
+    parts = [segment for segment in parsed.path.split("/") if segment]
+    if len(parts) < 2:
+        raise OptimizerSetupError(f"Could not parse owner/repo from optimizer URL: {repo_url}")
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    ref = DEFAULT_OPTIMIZER_REF
+    if len(parts) >= 4 and parts[2] == "tree":
+        ref = parts[3]
     if override_ref is not None:
         ref = override_ref
-    return OptimizerRepoSpec(clone_url=clone_url, ref=ref, slug=slug)
-
-
-def resolve_optimizer_context(manifest_path: Path | None) -> OptimizerContext | None:
-    if manifest_path is None:
-        return None
-    manifest_path = manifest_path.resolve()
-    if not manifest_path.is_file():
-        raise OptimizerSetupError(f"Manifest not found: {manifest_path}")
-    download_dir = manifest_path.parent
-    images_path = download_dir / "coworld_images.json"
-    coworld_id = download_dir.name if download_dir.name.startswith("cow_") else None
-    return OptimizerContext(
-        manifest_path=manifest_path,
-        download_dir=download_dir,
-        images_path=images_path if images_path.is_file() else None,
-        coworld_id=coworld_id,
+    return OptimizerRepoSpec(
+        clone_url=f"https://github.com/{owner}/{repo}.git", ref=ref, slug=f"{owner.lower()}-{repo.lower()}"
     )
-
-
-def optimizer_cache_root() -> Path:
-    override = os.environ.get("COWORLD_OPTIMIZER_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
-    return (base / "coworld" / "optimizers").resolve()
 
 
 def check_prerequisites() -> list[str]:
@@ -144,7 +108,15 @@ def check_prerequisites() -> list[str]:
     return warnings
 
 
-def ensure_optimizer_project(repo_spec: OptimizerRepoSpec, install_root: Path, *, refresh: bool) -> Path:
+def ensure_optimizer_project(repo_spec: OptimizerRepoSpec, install_root: Path | None, *, refresh: bool) -> Path:
+    if install_root is None:
+        override = os.environ.get("COWORLD_OPTIMIZER_DIR")
+        if override:
+            install_root = Path(override).expanduser().resolve()
+        else:
+            xdg = os.environ.get("XDG_DATA_HOME")
+            base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+            install_root = (base / "coworld" / "optimizers").resolve()
     install_dir = install_root / repo_spec.slug / repo_spec.ref
     git_dir = install_dir / ".git"
 
@@ -170,7 +142,10 @@ def ensure_optimizer_project(repo_spec: OptimizerRepoSpec, install_root: Path, *
             ]
         )
 
-    _assert_optimizer_workbench(install_dir, repo_spec)
+    if not (install_dir / "package.json").is_file():
+        raise OptimizerSetupError(
+            f"Cloned repository {repo_spec.label} does not look like an optimizer workbench (missing package.json)."
+        )
 
     console.print("[dim]Installing optimizer dependencies (bun install)[/dim]")
     _run(["bun", "install"], cwd=install_dir, timeout=INSTALL_TIMEOUT_SECONDS)
@@ -210,33 +185,35 @@ def ensure_database_schema(install_dir: Path, env: dict[str, str]) -> None:
     first load. Initializing here makes the very first render work.
     """
     database_url = env.get("DATABASE_URL", DEFAULT_DATABASE_URL)
-    if not _is_local_postgres_url(database_url):
+    parsed = urlparse(database_url)
+    if not (parsed.scheme.startswith("postgres") and parsed.hostname in ("localhost", "127.0.0.1", "::1")):
         return
-    if _agents_table_exists(install_dir, database_url):
+    user, db = _postgres_user_and_db(database_url)
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            user,
+            "-d",
+            db,
+            "-tAc",
+            "select to_regclass('public.agents')",
+        ],
+        cwd=install_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip() not in ("", "\\N"):
         return
 
     console.print("[dim]Initializing optimizer database schema (drizzle push + seed)[/dim]")
     _run(["bunx", "drizzle-kit", "push", "--force"], cwd=install_dir, env=env, timeout=INSTALL_TIMEOUT_SECONDS)
     _run(["bunx", "tsx", "lib/db/seed.ts"], cwd=install_dir, env=env, timeout=INSTALL_TIMEOUT_SECONDS)
-
-
-def build_optimizer_env(context: OptimizerContext | None, *, port: int) -> dict[str, str]:
-    env = dict(os.environ)
-    env.setdefault("DATABASE_URL", DEFAULT_DATABASE_URL)
-    env["PORT"] = str(port)
-    if context is not None:
-        env["COWORLD_MANIFEST_PATH"] = str(context.manifest_path)
-        env["COWORLD_DOWNLOAD_DIR"] = str(context.download_dir)
-    return env
-
-
-def start_optimizer_dev_server(install_dir: Path, env: dict[str, str], port: int) -> subprocess.Popen[bytes]:
-    console.print(f"[dim]Launching optimizer dev server on port {port}[/dim]")
-    return subprocess.Popen(
-        ["bun", "run", "dev", "--port", str(port)],
-        cwd=install_dir,
-        env=env,
-    )
 
 
 def wait_for_optimizer_ready(
@@ -261,7 +238,7 @@ def wait_for_optimizer_ready(
     raise OptimizerSetupError(f"Optimizer did not become ready at {base_url} within {timeout:.0f}s.")
 
 
-def bootstrap_game(base_url: str, context: OptimizerContext) -> OptimizerOpenResult:
+def bootstrap_game(base_url: str, context: OptimizerContext) -> str:
     payload = {
         "manifestPath": str(context.manifest_path),
         "downloadDir": str(context.download_dir),
@@ -276,7 +253,7 @@ def bootstrap_game(base_url: str, context: OptimizerContext) -> OptimizerOpenRes
     data = response.json()
     game_id = str(data.get("gameId", ""))
     detail_path = (data.get("urls") or {}).get("detail") or (f"/games/{game_id}" if game_id else "/games")
-    return OptimizerOpenResult(game_id=game_id, detail_url=f"{base_url}{detail_path}")
+    return f"{base_url}{detail_path}"
 
 
 def run_optimizer_session(
@@ -290,19 +267,41 @@ def run_optimizer_session(
     install_root: Path | None = None,
 ) -> None:
     repo_spec = resolve_optimizer_repository(manifest_path, override_repo=optimizer_repo, override_ref=optimizer_ref)
-    context = resolve_optimizer_context(manifest_path)
+    context = None
+    if manifest_path is not None:
+        manifest_path = manifest_path.resolve()
+        if not manifest_path.is_file():
+            raise OptimizerSetupError(f"Manifest not found: {manifest_path}")
+        download_dir = manifest_path.parent
+        images_path = download_dir / "coworld_images.json"
+        coworld_id = download_dir.name if download_dir.name.startswith("cow_") else None
+        context = OptimizerContext(
+            manifest_path=manifest_path,
+            download_dir=download_dir,
+            images_path=images_path if images_path.is_file() else None,
+            coworld_id=coworld_id,
+        )
 
     warnings = check_prerequisites()
     for warning in warnings:
         console.print(f"[yellow]{warning}[/yellow]")
 
-    root = install_root if install_root is not None else optimizer_cache_root()
-    install_dir = ensure_optimizer_project(repo_spec, root, refresh=refresh)
+    install_dir = ensure_optimizer_project(repo_spec, install_root, refresh=refresh)
 
-    env = build_optimizer_env(context, port=port)
+    env = dict(os.environ)
+    env.setdefault("DATABASE_URL", DEFAULT_DATABASE_URL)
+    env["PORT"] = str(port)
+    if context is not None:
+        env["COWORLD_MANIFEST_PATH"] = str(context.manifest_path)
+        env["COWORLD_DOWNLOAD_DIR"] = str(context.download_dir)
     ensure_postgres(install_dir, env["DATABASE_URL"])
     ensure_database_schema(install_dir, env)
-    proc = start_optimizer_dev_server(install_dir, env, port)
+    console.print(f"[dim]Launching optimizer dev server on port {port}[/dim]")
+    proc = subprocess.Popen(
+        ["bun", "run", "dev", "--port", str(port)],
+        cwd=install_dir,
+        env=env,
+    )
 
     base_url = f"http://127.0.0.1:{port}"
     try:
@@ -311,8 +310,7 @@ def run_optimizer_session(
         target_url = base_url + "/"
         if context is not None:
             console.print("[dim]Importing Coworld into the optimizer[/dim]")
-            result = bootstrap_game(base_url, context)
-            target_url = result.detail_url
+            target_url = bootstrap_game(base_url, context)
 
         console.print(f"[green]Optimizer running:[/green] {target_url}")
         console.print(f"[dim]Repo: {repo_spec.label}[/dim]")
@@ -327,28 +325,12 @@ def run_optimizer_session(
     except KeyboardInterrupt:
         console.print("\n[dim]Stopping optimizer dev server...[/dim]")
     finally:
-        _terminate(proc)
-
-
-def _manifest_optimizer_repository_url(manifest_path: Path) -> str | None:
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OptimizerSetupError(f"Could not read manifest {manifest_path}: {exc}") from exc
-    entries = manifest.get("optimizer") if isinstance(manifest, dict) else None
-    if not isinstance(entries, list):
-        return None
-    for entry in entries:
-        if isinstance(entry, dict) and entry.get("repository_url"):
-            return str(entry["repository_url"])
-    return None
-
-
-def _assert_optimizer_workbench(install_dir: Path, repo_spec: OptimizerRepoSpec) -> None:
-    if not (install_dir / "package.json").is_file():
-        raise OptimizerSetupError(
-            f"Cloned repository {repo_spec.label} does not look like an optimizer workbench (missing package.json)."
-        )
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def _docker_available() -> bool:
@@ -396,35 +378,6 @@ def _postgres_user_and_db(database_url: str) -> tuple[str, str]:
     return user, db
 
 
-def _is_local_postgres_url(database_url: str) -> bool:
-    parsed = urlparse(database_url)
-    return parsed.scheme.startswith("postgres") and parsed.hostname in ("localhost", "127.0.0.1", "::1")
-
-
-def _agents_table_exists(install_dir: Path, database_url: str) -> bool:
-    user, db = _postgres_user_and_db(database_url)
-    result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-U",
-            user,
-            "-d",
-            db,
-            "-tAc",
-            "select to_regclass('public.agents')",
-        ],
-        cwd=install_dir,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0 and result.stdout.strip() not in ("", "\\N")
-
-
 def _run(
     args: list[str],
     *,
@@ -446,13 +399,3 @@ def _run(
             f"Command failed ({' '.join(args)}):\n{result.stderr[-2000:] or result.stdout[-2000:]}"
         )
     return result
-
-
-def _terminate(proc: subprocess.Popen[bytes]) -> None:
-    if proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()

@@ -7,7 +7,7 @@ import pytest
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
-from coworld.certifier import load_executable_transcript
+from coworld.certifier import load_coworld_package, load_executable_transcript
 from coworld.cli import app
 from coworld.runner.runner import EpisodeArtifacts
 from coworld.upload import _certification_cache_key, _certified_manifest_cache_path
@@ -94,6 +94,7 @@ def test_certify_caches_exact_snapshot_during_source_mutation(
         if fails:
             raise RuntimeError("certification failed")
         return SimpleNamespace(
+            package=load_coworld_package(path),
             transcript=load_executable_transcript(),
             step_results=[],
             reporter_references=[],

@@ -772,24 +772,21 @@ def register_tournament_commands(app: typer.Typer) -> None:
             episode = client.get_episode_request(episode_request_id)
             if game:
                 content = client.get_episode_request_artifact_text(episode_request_id, "logs")
-                if output is not None:
-                    output_path = output
-                else:
-                    typer.echo(content)
-                    return
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content, encoding="utf-8")
-                console.print(f"[green]Log saved to {output_path}[/green]")
-                return
-            manifest = client.list_episode_request_policy_artifacts(episode_request_id)
-            agent_indices = [entry.position for entry in manifest if entry.has_log]
-            artifact_indices = [entry.position for entry in manifest if entry.has_artifact]
-            if artifact:
+            else:
+                manifest = client.list_episode_request_policy_artifacts(episode_request_id)
+                agent_indices = [entry.position for entry in manifest if entry.has_log]
+                artifact_indices = [entry.position for entry in manifest if entry.has_artifact]
                 if mine:
-                    allowed_policy_ids = _mine_policy_version_ids(client, division_id=None)
-                    allowed_agent_indices = _agent_indices_for_policies(episode, allowed_policy_ids)
-                    artifact_indices = [idx for idx in artifact_indices if idx in allowed_agent_indices]
-                if agent is not None:
+                    allowed = _agent_indices_for_policies(episode, _mine_policy_version_ids(client, division_id=None))
+                    agent_indices = [idx for idx in agent_indices if idx in allowed]
+                    artifact_indices = [idx for idx in artifact_indices if idx in allowed]
+                if artifact:
+                    if agent is None:
+                        if output is not None:
+                            console.print("[red]Use --agent N with --output to pick which artifact to write.[/red]")
+                            raise typer.Exit(1)
+                        _print_policy_artifacts(artifact_indices)
+                        return
                     if agent not in artifact_indices:
                         if mine:
                             console.print(
@@ -801,43 +798,31 @@ def register_tournament_commands(app: typer.Typer) -> None:
                                 f"[red]Agent {agent} has no artifact. Available agent indices: {available}.[/red]"
                             )
                         raise typer.Exit(1)
-                    content = _download_policy_artifact(client, episode, agent)
-                    output_path = _resolve_artifact_output(episode_request_id, agent, download_dir, output)
+                    artifact_content = _download_policy_artifact(client, episode, agent)
+                    output_path = _resolve_artifact_output(episode_request_id, agent, output)
                     output_path.parent.mkdir(parents=True, exist_ok=True)
-                    output_path.write_bytes(content)
+                    output_path.write_bytes(artifact_content)
                     console.print(f"[green]Artifact saved to {output_path}[/green]")
                     return
-                if output is not None:
-                    console.print("[red]Use --agent N with --output to pick which artifact to write.[/red]")
-                    raise typer.Exit(1)
-                if list_logs or agent is None:
-                    _print_policy_artifacts(artifact_indices)
-                return
-            if mine:
-                allowed_policy_ids = _mine_policy_version_ids(client, division_id=None)
-                allowed_agent_indices = _agent_indices_for_policies(episode, allowed_policy_ids)
-                agent_indices = [idx for idx in agent_indices if idx in allowed_agent_indices]
-                artifact_indices = [idx for idx in artifact_indices if idx in allowed_agent_indices]
-            if agent is not None:
-                if mine and agent not in agent_indices:
-                    console.print(f"[red]Agent {agent} is not controlled by one of your matched policies.[/red]")
-                    raise typer.Exit(1)
-                content = _download_policy_log(client, episode, agent)
-                if output is not None:
-                    output_path = output
-                else:
+                if agent is not None:
+                    if mine and agent not in agent_indices:
+                        console.print(f"[red]Agent {agent} is not controlled by one of your matched policies.[/red]")
+                        raise typer.Exit(1)
+                    policy_version_id = _policy_version_id_for_agent(episode, agent)
+                    content = client.get_episode_request_policy_log(episode.id, policy_version_id, agent)
+            if game or agent is not None:
+                if output is None:
                     typer.echo(content)
-                    if agent in artifact_indices:
+                    if not game and agent in artifact_indices:
                         _print_artifact_hint(episode_request_id, [agent])
-                    return
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content, encoding="utf-8")
-                console.print(f"[green]Log saved to {output_path}[/green]")
+                else:
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_text(content, encoding="utf-8")
+                    console.print(f"[green]Log saved to {output}[/green]")
                 return
-        if list_logs or agent is None:
-            _print_policy_logs(agent_indices)
-            if artifact_indices:
-                _print_artifact_hint(episode_request_id, artifact_indices)
+        _print_policy_logs(agent_indices)
+        if artifact_indices:
+            _print_artifact_hint(episode_request_id, artifact_indices)
 
     @app.command("replays", help="List or download replay files.", epilog=docs_epilog("replays"))
     def replays(
@@ -1398,16 +1383,6 @@ def _download_policy_artifact(
     return client.get_episode_request_policy_artifact(episode.id, policy_version_id, agent_idx)
 
 
-def _download_policy_log(
-    client: CoworldApiClient,
-    episode: V2EpisodeRequestRow,
-    agent_idx: int,
-) -> str:
-    """Fetch one agent's policy log via the ownership-scoped v2 episode-request route."""
-    policy_version_id = _policy_version_id_for_agent(episode, agent_idx)
-    return client.get_episode_request_policy_log(episode.id, policy_version_id, agent_idx)
-
-
 def _print_artifact_hint(episode_request_id: str, agent_indices: list[int]) -> None:
     agents = ", ".join(str(idx) for idx in agent_indices)
     plural = "s" if len(agent_indices) > 1 else ""
@@ -1425,18 +1400,11 @@ def _print_artifact_hint(episode_request_id: str, agent_indices: list[int]) -> N
 def _resolve_artifact_output(
     episode_request_id: str,
     agent: int,
-    download_dir: Path | None,
     output: Path | None,
 ) -> Path:
-    """Pick the destination file for a single agent's artifact.
-
-    Precedence: explicit --output, then --download-dir, then a default name in the cwd. The
-    cwd default refuses to clobber an existing file so a re-run does not silently overwrite.
-    """
+    """Use --output or refuse to clobber the default artifact path in the cwd."""
     if output is not None:
         return output
-    if download_dir is not None:
-        return download_dir / f"{episode_request_id}-policy_agent_{agent}.zip"
     default_path = Path.cwd() / f"{episode_request_id}-policy_agent_{agent}.zip"
     if default_path.exists():
         console.print(

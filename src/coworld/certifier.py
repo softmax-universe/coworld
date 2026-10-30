@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Callable, Literal, TypeVar, cast
 from urllib.parse import quote, unquote, urlparse
 from uuid import UUID
 
@@ -89,6 +89,8 @@ _CERTIFICATION_POLICY_IDS = (
     UUID("00000000-0000-4000-8000-000000000003"),
     UUID("00000000-0000-4000-8000-000000000004"),
 )
+_StepValue = TypeVar("_StepValue")
+
 CertifierEpisodeRunner = Callable[[CoworldEpisodeJobSpec, EpisodeArtifacts, float], None]
 
 
@@ -592,10 +594,10 @@ def certify_coworld(
 
     def run_step(
         step_id: str,
-        action: Callable[[], object],
-        pass_feedback: Callable[[object], str | None] | str | None = None,
-        source_url_results: Callable[[object], list[SourceUrlResult]] | None = None,
-    ) -> object:
+        action: Callable[[], _StepValue],
+        pass_feedback: Callable[[_StepValue], str | None] | str | None = None,
+        source_url_results: Callable[[_StepValue], list[SourceUrlResult]] | None = None,
+    ) -> _StepValue:
         step = _transcript_step(transcript, step_id)
         announce(step)
         try:
@@ -617,19 +619,15 @@ def certify_coworld(
         )
         return value
 
-    package = cast(
-        CoworldPackage,
-        run_step(
-            "matriculate",
-            lambda: load_coworld_package(manifest_path, require_certification_tags=True),
-            "Manifest schema and certification tags validated.",
-        ),
+    package = run_step(
+        "matriculate",
+        lambda: load_coworld_package(manifest_path, require_certification_tags=True),
+        "Manifest schema and certification tags validated.",
     )
     ensure_downloaded_images(package.manifest_path)
     matriculated_at = datetime.now(timezone.utc)
 
-    def source_refs_feedback(checked: object) -> str:
-        results = cast(list[SourceUrlResult], checked)
+    def source_refs_feedback(results: list[SourceUrlResult]) -> str:
         verified = sum(result.publicly_accessible for result in results)
         lines = [
             f"{result.runnable}: {result.status}"
@@ -643,7 +641,7 @@ def certify_coworld(
         "source-resolves",
         lambda: inspect_source_references(package),
         source_refs_feedback,
-        source_url_results=lambda value: cast(list[SourceUrlResult], value),
+        source_url_results=lambda value: value,
     )
     run_step("images-reachable", lambda: check_images_reachable(package), "All declared images are reachable.")
     run_step(
@@ -654,32 +652,25 @@ def certify_coworld(
 
     artifacts = EpisodeArtifacts.create(workspace)
 
-    def run_smoke_episode() -> tuple[JsonObject, CoworldEpisodeJobSpec]:
+    def run_smoke_episode() -> JsonObject:
         episode_request = build_episode_request(package, artifacts)
         episode_spec = build_coworld_episode_job_spec(episode_request)
         if episode_runner is None:
             _run_local_certifier_episode(package, episode_spec, artifacts, timeout_seconds)
         else:
             episode_runner(episode_spec, artifacts, timeout_seconds)
-        return episode_request, episode_spec
+        return episode_request
 
-    smoke_result = cast(
-        tuple[JsonObject, CoworldEpisodeJobSpec],
-        run_step(
-            "smoke-episode",
-            run_smoke_episode,
-            f"Episode completed in {artifacts.workspace}.",
-        ),
+    episode_request = run_step(
+        "smoke-episode",
+        run_smoke_episode,
+        f"Episode completed in {artifacts.workspace}.",
     )
-    episode_request = smoke_result[0]
 
-    results = cast(
-        JsonObject,
-        run_step(
-            "results-conform",
-            lambda: load_results(package, artifacts),
-            f"{artifacts.results_path} validates against game.results_schema.",
-        ),
+    results = run_step(
+        "results-conform",
+        lambda: load_results(package, artifacts),
+        f"{artifacts.results_path} validates against game.results_schema.",
     )
 
     run_step(
@@ -701,15 +692,11 @@ def certify_coworld(
         )
     run_step("players-run", lambda: validate_players_ran(package, artifacts), "Game and declared players started.")
 
-    supporting_result = cast(
-        tuple[list[str], str],
-        run_step(
-            "supporting-roles",
-            lambda: run_supporting_roles(package, artifacts, timeout_seconds),
-            lambda value: cast(tuple[list[str], str], value)[1],
-        ),
+    reporter_references, _ = run_step(
+        "supporting-roles",
+        lambda: run_supporting_roles(package, artifacts, timeout_seconds),
+        lambda value: value[1],
     )
-    reporter_references = supporting_result[0]
 
     _assert_transcript_complete(transcript, step_results)
     graduated_at = datetime.now(timezone.utc)

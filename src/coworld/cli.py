@@ -869,7 +869,6 @@ def main(
     from coworld.api_client import CoworldApiClient  # noqa: PLC0415
 
     CoworldApiClient.set_elevated(elevated)
-    CoworldUploadClient.set_elevated(elevated)
 
 
 @app.command(

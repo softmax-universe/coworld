@@ -20,7 +20,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from types import TracebackType
 from typing import IO, Any, Literal, Self
 from urllib.parse import quote, urlparse
 
@@ -29,13 +28,12 @@ import typer
 from pydantic import BaseModel, Field
 
 from coworld.agent_guidance import update_agent_guidance
-from coworld.api_client import CoworldApiClient, LeaguePublic, _detail
+from coworld.api_client import CoworldApiClient, CoworldHttpClient, LeaguePublic, _detail
 from coworld.bundle import resolve_registry_image_ref
 from coworld.certifier import EXECUTABLE_TRANSCRIPT_PATH, certify_coworld, load_coworld_package
 from coworld.config import (
     DEFAULT_SUBMIT_SERVER,
     DOCS_PAGES,
-    list_page_payload,
     participation_guide_url,
 )
 from coworld.image_refs import is_digest_pinned_image_ref, is_mutable_registry_image_ref
@@ -48,9 +46,7 @@ from coworld.replay_viewer import source_replay_viewer_bundle
 from coworld.runner.runner import assert_docker_image_reachable
 from coworld.types import MANIFEST_ROLE_SECTIONS, CoworldPlayerStartup, CoworldRunnableResources
 from softmax.docs import DOCS_AGENT_INDEX_URL, DOCS_AGENT_SKILL_URL
-from softmax_client import credentials as softmax_credentials
 from softmax_client.agent import user_agent
-from softmax_client.rate_limits import RateLimitTransport
 
 _LOCAL_TAG_SEPARATOR_RE = re.compile(r"[^a-z0-9._-]+")
 _IMAGE_ID_RE = re.compile(r"^img_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -463,46 +459,16 @@ class CoworldStatusResult:
         return bool(self.hosted_smoke_episodes) and not self.hosted_smoke_failed and not self.hosted_smoke_pending
 
 
-class CoworldUploadClient:
-    # Process-scoped elevation flag, set by the top-level `coworld --elevated` Typer
-    # callback so every upload/manage command in this invocation carries the header.
-    # Kept as a class attribute mirroring CoworldApiClient — the two clients are used
-    # side by side and must not diverge on elevation state.
-    _elevated = False
+class CoworldUploadClient(CoworldHttpClient):
+    _follow_redirects = False
 
     def __init__(self, server_url: str, token: str):
-        self._server_url = server_url.rstrip("/")
-        self._http_client = httpx.Client(
-            base_url=f"{self._server_url}/observatory",
-            headers={"User-Agent": user_agent("coworld")},
-            timeout=30.0,
-            transport=RateLimitTransport(),
-        )
-        self._token = token
+        super().__init__(server_url=server_url, token=token)
 
-    @classmethod
-    def set_elevated(cls, elevated: bool) -> None:
-        cls._elevated = elevated
+    def _check_response(self, response: httpx.Response) -> None:
+        _raise_for_status(response)
 
-    @classmethod
-    def from_login(cls, *, server_url: str) -> Self:
-        token = softmax_credentials.load_current_token(server=server_url)
-        if token is None:
-            raise RuntimeError(f"Not authenticated. Run: uv run softmax login --server {server_url}")
-        return cls(server_url=server_url, token=token)
-
-    def close(self) -> None:
-        self._http_client.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()
         if isinstance(exc_val, (httpx.ConnectError, httpx.ConnectTimeout)) and urlparse(self._server_url).hostname in {
             "localhost",
@@ -515,91 +481,69 @@ class CoworldUploadClient:
                 "uv run metta dev up --full-coworld"
             ) from exc_val
 
-    def _headers(self) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self._token}"}
-        if type(self)._elevated:
-            if self._token.startswith("ply_"):
-                raise RuntimeError(
-                    "--elevated cannot be used with a player-subject token. Player sessions "
-                    "are not eligible for Softmax team access. Run `softmax player unset` to "
-                    "revert to your user credential, or omit --elevated."
-                )
-            headers["X-Use-Elevated-Privileges"] = "true"
-        return headers
-
     def upload_manifest(
         self, manifest: dict[str, object], *, visibility: Literal["public", "private"] | None = None
     ) -> CoworldUploadResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/coworlds/upload",
-            headers=self._headers(),
+            CoworldUploadResponse,
             json={"manifest": manifest, **({"visibility": visibility} if visibility is not None else {})},
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldUploadResponse.model_validate(response.json())
 
     def request_coworld_player_file_upload(
         self, *, content_hash: str, size_bytes: int
     ) -> CoworldPlayerFileUploadResponse:
-        response = self._http_client.post(
+        response = self._response(
+            "POST",
             "/v2/coworlds/player-files/upload",
-            headers=self._headers(),
             json={"content_hash": content_hash, "size_bytes": size_bytes},
             timeout=60.0,
         )
         if response.status_code == 409:
             return CoworldPlayerFileUploadResponse(upload_url=None)
-        _raise_for_status(response)
+        self._check_response(response)
         return CoworldPlayerFileUploadResponse.model_validate(response.json())
 
     def register_reporter(
         self, *, name: str, display_name: str, description: str, outputs: list[dict[str, Any]]
     ) -> ReporterRegisterResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/reporters/register",
-            headers=self._headers(),
+            ReporterRegisterResponse,
             json={"name": name, "display_name": display_name, "description": description, "outputs": outputs},
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return ReporterRegisterResponse.model_validate(response.json())
 
     def request_reporter_upload(
         self, *, name: str, content_hash: str, size_bytes: int, attributes: dict[str, Any]
     ) -> ReporterUploadResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/reporters/upload",
-            headers=self._headers(),
+            ReporterUploadResponse,
             json={"name": name, "content_hash": content_hash, "size_bytes": size_bytes, "attributes": attributes},
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return ReporterUploadResponse.model_validate(response.json())
 
     def complete_reporter_upload(
         self, *, name: str, content_hash: str, attributes: dict[str, Any]
     ) -> ReporterUploadCompleteResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/reporters/upload/complete",
-            headers=self._headers(),
+            ReporterUploadCompleteResponse,
             json={"name": name, "content_hash": content_hash, "attributes": attributes},
             timeout=300.0,
         )
-        _raise_for_status(response)
-        return ReporterUploadCompleteResponse.model_validate(response.json())
 
     def request_replay_viewer_bundle_upload(
         self, *, content_hash: str, size_bytes: int
     ) -> ReplayViewerBundleUploadResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/coworlds/replay-viewer-bundles/upload",
-            headers=self._headers(),
+            ReplayViewerBundleUploadResponse,
             json={"content_hash": content_hash, "size_bytes": size_bytes},
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return ReplayViewerBundleUploadResponse.model_validate(response.json())
 
     def complete_replay_viewer_bundle_upload(
         self, *, content_hash: str, size_bytes: int
@@ -610,14 +554,14 @@ class CoworldUploadClient:
         return self._wait_for_replay_viewer_bundle(content_hash=content_hash, size_bytes=size_bytes, status=payload)
 
     def get_replay_viewer_bundle(self, content_hash: str) -> ReplayViewerBundleCompleteResponse | None:
-        response = self._http_client.get(
+        response = self._response(
+            "GET",
             f"/v2/coworlds/replay-viewer-bundles/{content_hash}",
-            headers=self._headers(),
             timeout=60.0,
         )
         if response.status_code == 404:
             return None
-        _raise_for_status(response)
+        self._check_response(response)
         return ReplayViewerBundleCompleteResponse.model_validate(response.json())
 
     def _post_replay_viewer_bundle_complete(
@@ -626,9 +570,9 @@ class CoworldUploadClient:
         """POST the complete request; None means indeterminate (gateway 504 or client-side
         timeout) -- the server may still be expanding, so the caller should poll."""
         try:
-            response = self._http_client.post(
+            response = self._response(
+                "POST",
                 "/v2/coworlds/replay-viewer-bundles/upload/complete",
-                headers=self._headers(),
                 json={"content_hash": content_hash, "size_bytes": size_bytes},
                 timeout=120.0,
             )
@@ -636,7 +580,7 @@ class CoworldUploadClient:
             return None
         if response.status_code == 504:
             return None
-        _raise_for_status(response)
+        self._check_response(response)
         return ReplayViewerBundleCompleteResponse.model_validate(response.json())
 
     def _wait_for_replay_viewer_bundle(
@@ -666,9 +610,7 @@ class CoworldUploadClient:
         )
 
     def whoami(self) -> WhoAmIResponse:
-        response = self._http_client.get("/whoami", headers=self._headers(), timeout=30.0)
-        _raise_for_status(response)
-        return WhoAmIResponse.model_validate(response.json())
+        return self._get("/whoami", WhoAmIResponse, timeout=30.0)
 
     def patch_commissioner(
         self,
@@ -686,14 +628,12 @@ class CoworldUploadClient:
             payload["runnable_id"] = runnable_id
         if version is not None:
             payload["version"] = version
-        response = self._http_client.post(
+        return self._post(
             "/v2/coworlds/patch-commissioner",
-            headers=self._headers(),
+            CoworldUploadResponse,
             json=payload,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldUploadResponse.model_validate(response.json())
 
     def list_coworld_episode_requests(
         self,
@@ -705,40 +645,29 @@ class CoworldUploadClient:
         params: dict[str, str | int] = {"limit": limit}
         if source is not None:
             params["source"] = source
-        response = self._http_client.get(
+        response = self._response(
+            "GET",
             f"/v2/coworlds/{coworld_id}/episode-requests",
-            headers=self._headers(),
             params=params,
             timeout=60.0,
         )
-        _raise_for_status(response)
+        self._check_response(response)
         return response.json()["entries"]
 
     def get_episode_request(self, episode_request_id: str) -> dict[str, Any]:
-        response = self._http_client.get(
+        response = self._response(
+            "GET",
             f"/v2/episode-requests/{episode_request_id}",
-            headers=self._headers(),
             timeout=60.0,
         )
-        _raise_for_status(response)
+        self._check_response(response)
         return response.json()
 
     def list_coworlds(self, *, limit: int = 200, cursor: str | None = None) -> CoworldListPage:
         params: dict[str, str | int] = {"limit": limit}
         if cursor is not None:
             params["cursor"] = cursor
-        response = self._http_client.get(
-            "/v2/coworlds/summaries",
-            headers=self._headers(),
-            params=params,
-            timeout=60.0,
-        )
-        _raise_for_status(response)
-        entries, next_cursor = list_page_payload(response)
-        return CoworldListPage(
-            entries=[CoworldListEntry.model_validate(item) for item in entries],
-            next_cursor=next_cursor,
-        )
+        return self._get_page("/v2/coworlds/summaries", CoworldListPage, CoworldListEntry, params=params, timeout=60.0)
 
     def find_coworld(self, coworld_id: str) -> CoworldListEntry | None:
         cursor: str | None = None
@@ -752,31 +681,25 @@ class CoworldUploadClient:
             cursor = page.next_cursor
 
     def get_coworld(self, coworld_id: str) -> CoworldUploadResponse:
-        response = self._http_client.get(
+        return self._get(
             f"/v2/coworlds/{coworld_id}",
-            headers=self._headers(),
+            CoworldUploadResponse,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldUploadResponse.model_validate(response.json())
 
     def get_coworld_certification(self, coworld_id: str) -> CoworldCertificationStatus:
-        response = self._http_client.get(
+        return self._get(
             f"/v2/coworlds/{coworld_id}/certification",
-            headers=self._headers(),
+            CoworldCertificationStatus,
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return CoworldCertificationStatus.model_validate(response.json())
 
     def retry_coworld_certification(self, coworld_id: str) -> CoworldCertificationStatus:
-        response = self._http_client.post(
+        return self._post(
             f"/v2/coworlds/{coworld_id}/certification/retry",
-            headers=self._headers(),
+            CoworldCertificationStatus,
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return CoworldCertificationStatus.model_validate(response.json())
 
     def find_canonical_coworld(self, name: str) -> CoworldListEntry | None:
         for coworld in self.iter_coworlds_by_name(name):
@@ -807,9 +730,9 @@ class CoworldUploadClient:
         overrides: dict[str, Any] | None = None,
         enabled: bool = True,
     ) -> CoworldLeagueSeedResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/coworld-league-seeds",
-            headers=self._headers(),
+            CoworldLeagueSeedResponse,
             json={
                 "coworld_name": coworld_name,
                 "league_key": league_key,
@@ -821,8 +744,6 @@ class CoworldUploadClient:
             },
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldLeagueSeedResponse.model_validate(response.json())
 
     def setup_league(
         self,
@@ -831,23 +752,19 @@ class CoworldUploadClient:
         approve: bool = False,
         revision: str | None = None,
     ) -> LeagueSetupResponse:
-        response = self._http_client.post(
+        return self._post(
             f"/v2/leagues/{league_id}/setup",
-            headers=self._headers(),
+            LeagueSetupResponse,
             json=LeagueSetupRequest(approve=approve, revision=revision).model_dump(mode="json"),
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return LeagueSetupResponse.model_validate(response.json())
 
     def list_league_seeds(self) -> list[CoworldLeagueSeedResponse]:
-        response = self._http_client.get(
+        return self._get(
             "/v2/coworld-league-seeds",
-            headers=self._headers(),
+            list[CoworldLeagueSeedResponse],
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return [CoworldLeagueSeedResponse.model_validate(item) for item in response.json()]
 
     def rebind_league_seeds(
         self,
@@ -855,26 +772,23 @@ class CoworldUploadClient:
         changes: list[CoworldLeagueSeedRebindChange],
         dry_run: bool = True,
     ) -> CoworldLeagueSeedRebindResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/coworld-league-seeds/rebind",
-            headers=self._headers(),
+            CoworldLeagueSeedRebindResponse,
             json={
                 "dry_run": dry_run,
                 "changes": [change.model_dump(mode="json") for change in changes],
             },
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldLeagueSeedRebindResponse.model_validate(response.json())
 
     def set_league_game_of_week(self, *, seed_id: str) -> CoworldLeagueSeedResponse:
-        response = self._http_client.put(
+        return self._request(
+            "PUT",
             f"/v2/coworld-league-seeds/{quote(seed_id, safe='')}/game-of-week",
-            headers=self._headers(),
+            CoworldLeagueSeedResponse,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldLeagueSeedResponse.model_validate(response.json())
 
     def update_league_seed(
         self,
@@ -889,14 +803,13 @@ class CoworldUploadClient:
             payload["overrides"] = overrides
         if default_variant_id is not None or clear_default_variant:
             payload["default_variant_id"] = default_variant_id
-        response = self._http_client.patch(
+        return self._request(
+            "PATCH",
             f"/v2/coworld-league-seeds/{quote(seed_id, safe='')}",
-            headers=self._headers(),
+            CoworldLeagueSeedResponse,
             json=payload,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldLeagueSeedResponse.model_validate(response.json())
 
     def put_coworld_secret(
         self,
@@ -905,32 +818,29 @@ class CoworldUploadClient:
         secret_name: str,
         body: bytes,
     ) -> CoworldSecretResponse:
-        response = self._http_client.put(
+        return self._request(
+            "PUT",
             f"/v2/coworlds/secrets/{quote(coworld_name, safe='')}/{quote(secret_name, safe='')}",
-            headers={**self._headers(), "Content-Type": "application/octet-stream"},
+            CoworldSecretResponse,
+            headers={"Content-Type": "application/octet-stream"},
             content=body,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldSecretResponse.model_validate(response.json())
 
     def list_coworld_secrets(self, *, coworld_name: str) -> list[CoworldSecretResponse]:
-        response = self._http_client.get(
+        return self._get(
             f"/v2/coworlds/secrets/{quote(coworld_name, safe='')}",
-            headers=self._headers(),
+            list[CoworldSecretResponse],
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return [CoworldSecretResponse.model_validate(item) for item in response.json()]
 
     def delete_coworld_secret(self, *, coworld_name: str, secret_name: str) -> CoworldSecretResponse:
-        response = self._http_client.delete(
+        return self._request(
+            "DELETE",
             f"/v2/coworlds/secrets/{quote(coworld_name, safe='')}/{quote(secret_name, safe='')}",
-            headers=self._headers(),
+            CoworldSecretResponse,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return CoworldSecretResponse.model_validate(response.json())
 
     def create_hosted_game(
         self,
@@ -939,87 +849,70 @@ class CoworldUploadClient:
         variant_id: str | None = None,
         allow_spectators: bool = False,
     ) -> HostedGameCreateResponse:
-        response = self._http_client.post(
+        response = self._response(
+            "POST",
             "/v2/coworlds/play/session",
-            headers=self._headers(),
             json={"coworld_id": coworld_id},
             timeout=120.0,
         )
-        _raise_for_status(response)
+        self._check_response(response)
         created = HostedGameCreateResponse.model_validate(response.json())
         if variant_id is not None:
-            config_response = self._http_client.put(
+            config_response = self._response(
+                "PUT",
                 f"/v2/coworlds/play/session/{created.session_id}/config",
-                headers=self._headers(),
                 json={"kind": "variant", "variant_id": variant_id},
                 timeout=120.0,
             )
-            _raise_for_status(config_response)
+            self._check_response(config_response)
             created.player_count = config_response.json()["player_count"]
         if not allow_spectators:
-            spectators_response = self._http_client.put(
+            spectators_response = self._response(
+                "PUT",
                 f"/v2/coworlds/play/session/{created.session_id}/config",
-                headers=self._headers(),
                 json={"kind": "spectators", "allow_spectators": False},
                 timeout=120.0,
             )
-            _raise_for_status(spectators_response)
+            self._check_response(spectators_response)
         return created
 
     def join_hosted_game(self, session_id: str) -> HostedGameJoinResponse:
-        response = self._http_client.post(
+        return self._post(
             f"/v2/coworlds/play/session/{session_id}/join",
-            headers=self._headers(),
+            HostedGameJoinResponse,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return HostedGameJoinResponse.model_validate(response.json())
 
     def list_images(self, *, limit: int = 200, cursor: str | None = None) -> ContainerImagePage:
         params: dict[str, str | int] = {"limit": limit}
         if cursor is not None:
             params["cursor"] = cursor
-        response = self._http_client.get(
-            "/v2/container_images",
-            headers=self._headers(),
-            params=params,
-            timeout=60.0,
-        )
-        _raise_for_status(response)
-        entries, next_cursor = list_page_payload(response)
-        return ContainerImagePage(
-            entries=[ContainerImageResponse.model_validate(item) for item in entries],
-            next_cursor=next_cursor,
+        return self._get_page(
+            "/v2/container_images", ContainerImagePage, ContainerImageResponse, params=params, timeout=60.0
         )
 
     def get_image(self, image_id: str) -> ContainerImageResponse:
-        response = self._http_client.get(
+        return self._get(
             f"/v2/container_images/{image_id}",
-            headers=self._headers(),
+            ContainerImageResponse,
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return ContainerImageResponse.model_validate(response.json())
 
     def request_image_upload(self, *, name: str, client_hash: str) -> ImageUploadResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/container_images/upload",
-            headers=self._headers(),
+            ImageUploadResponse,
             json={"name": name, "client_hash": client_hash},
             timeout=60.0,
         )
-        _raise_for_status(response)
-        return ImageUploadResponse.model_validate(response.json())
 
     def complete_image_upload(self, image_id: str) -> ContainerImageResponse:
-        response = self._http_client.post(
+        return self._post(
             "/v2/container_images/upload/complete",
-            headers=self._headers(),
+            ContainerImageResponse,
             json={"id": image_id},
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return ContainerImageResponse.model_validate(response.json())
 
     def complete_docker_image_policy(
         self,
@@ -1034,13 +927,13 @@ class CoworldUploadClient:
     ) -> PolicyVersionResponse:
         policy_secret_env_id: str | None = None
         if secret_env:
-            secret_response = self._http_client.post(
+            secret_response = self._response(
+                "POST",
                 "/stats/policy-secret-envs",
-                headers=self._headers(),
                 json={"policy_secret_env": secret_env},
                 timeout=120.0,
             )
-            _raise_for_status(secret_response)
+            self._check_response(secret_response)
             policy_secret_env_id = secret_response.json()["id"]
 
         payload: dict[str, Any] = {"container_image_id": container_image_id}
@@ -1056,14 +949,12 @@ class CoworldUploadClient:
             payload["startup"] = startup.model_dump(mode="json")
         if tags:
             payload["tags"] = tags
-        response = self._http_client.post(
+        return self._post(
             "/stats/policies/docker-img/complete",
-            headers=self._headers(),
+            PolicyVersionResponse,
             json=payload,
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return PolicyVersionResponse.model_validate(response.json())
 
     def lookup_policy_upload(self, inputs: dict[str, Any]) -> PolicyVersionResponse | None:
         response = self._http_client.post(
@@ -1084,9 +975,9 @@ class CoworldUploadClient:
         size_bytes: int,
         tags: dict[str, str] | None,
     ) -> PlayerFilePolicyUploadResponse:
-        response = self._http_client.post(
+        response = self._response(
+            "POST",
             "/stats/policies/files/upload",
-            headers=self._headers(),
             json={
                 **({"name": name} if name is not None else {}),
                 "content_hash": content_hash,
@@ -1097,7 +988,7 @@ class CoworldUploadClient:
         )
         if response.status_code == 409:
             return PlayerFilePolicyUploadResponse()
-        _raise_for_status(response)
+        self._check_response(response)
         return PlayerFilePolicyUploadResponse.model_validate(response.json())
 
     def complete_player_file_policy(
@@ -1108,9 +999,9 @@ class CoworldUploadClient:
         size_bytes: int,
         tags: dict[str, str] | None,
     ) -> PolicyVersionResponse:
-        response = self._http_client.post(
+        return self._post(
             "/stats/policies/files/complete",
-            headers=self._headers(),
+            PolicyVersionResponse,
             json={
                 **({"name": name} if name is not None else {}),
                 "content_hash": content_hash,
@@ -1119,8 +1010,6 @@ class CoworldUploadClient:
             },
             timeout=120.0,
         )
-        _raise_for_status(response)
-        return PolicyVersionResponse.model_validate(response.json())
 
 
 def _humanize_reporter_id(reporter_id: str) -> str:

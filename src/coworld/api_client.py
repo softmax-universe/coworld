@@ -949,29 +949,30 @@ class FeedInstructions(CoworldAPIModel):
     roger: str | None
 
 
-class CoworldApiClient:
+class CoworldHttpClient:
     # Process-scoped: set by the top-level Typer `--elevated` callback in `coworld/cli.py`
     # so it applies to every client constructed later in the same invocation. Client-side
     # code that instantiates the client outside the CLI can flip this too, but the flag is
     # only ever sent on user-owned tokens (see _headers() — player-subject tokens are
     # refused because their elevation would be a no-op at the backend anyway).
     _elevated = False
+    _follow_redirects = True
 
     def __init__(self, *, server_url: str, token: str | None = None):
-        root = server_url.rstrip("/")
-        base_url = f"{root}/observatory"
+        self._server_url = server_url.rstrip("/")
+        base_url = f"{self._server_url}/observatory"
         self._http_client = httpx.Client(
             base_url=base_url,
             headers={"User-Agent": user_agent("coworld")},
             timeout=30.0,
-            follow_redirects=True,
+            follow_redirects=self._follow_redirects,
             transport=RateLimitTransport(),
         )
         self._token = token
 
-    @classmethod
-    def set_elevated(cls, elevated: bool) -> None:
-        cls._elevated = elevated
+    @staticmethod
+    def set_elevated(elevated: bool) -> None:
+        CoworldHttpClient._elevated = elevated
 
     @classmethod
     def from_login(cls, *, server_url: str) -> Self:
@@ -993,7 +994,7 @@ class CoworldApiClient:
         if self._token is None:
             return {}
         headers = {"Authorization": f"Bearer {self._token}"}
-        if type(self)._elevated:
+        if CoworldHttpClient._elevated:
             if self._token.startswith("ply_"):
                 raise RuntimeError(
                     "--elevated cannot be used with a player-subject token. Player sessions "
@@ -1003,11 +1004,43 @@ class CoworldApiClient:
             headers["X-Use-Elevated-Privileges"] = "true"
         return headers
 
-    def _request(self, method: str, path: str, response_type: Any, **kwargs: Any) -> Any:
-        response = self._http_client.request(method, path, headers=self._headers(), **kwargs)
+    def _response(
+        self, method: str, path: str, *, headers: dict[str, str] | None = None, **kwargs: Any
+    ) -> httpx.Response:
+        return self._http_client.request(method, path, headers={**self._headers(), **(headers or {})}, **kwargs)
+
+    def _check_response(self, response: httpx.Response) -> None:
         _raise_for_status(response)
+
+    def _request(self, method: str, path: str, response_type: Any, **kwargs: Any) -> Any:
+        response = self._response(method, path, **kwargs)
+        self._check_response(response)
         return TypeAdapter(response_type).validate_python(response.json())
 
+    def _get(self, path: str, response_type: Any, **kwargs: Any) -> Any:
+        return self._request("GET", path, response_type, **kwargs)
+
+    def _post(self, path: str, response_type: Any, **kwargs: Any) -> Any:
+        return self._request("POST", path, response_type, **kwargs)
+
+    def _get_page(self, path: str, page_type: Any, entry_type: Any, **kwargs: Any) -> Any:
+        response = self._response("GET", path, **kwargs)
+        self._check_response(response)
+        entries, next_cursor = list_page_payload(response)
+        return page_type(entries=TypeAdapter(list[entry_type]).validate_python(entries), next_cursor=next_cursor)
+
+    def get_bytes(self, path: str, **kwargs: Any) -> bytes:
+        response = self._response("GET", path, **kwargs)
+        self._check_response(response)
+        return response.content
+
+    def get_text(self, path: str, *, timeout: float | None = None) -> str:
+        response = self._response("GET", path, timeout=timeout)
+        self._check_response(response)
+        return response.text
+
+
+class CoworldApiClient(CoworldHttpClient):
     def update_coworld_visibility(self, coworld_name: str, visibility: str) -> CoworldVisibilityResponse:
         return self._post(
             f"/v2/coworlds/{quote(coworld_name, safe='')}/visibility",
@@ -1036,28 +1069,6 @@ class CoworldApiClient:
 
     def clear_feed_instructions(self, hat: FeedHat) -> FeedInstructions:
         return self._request("DELETE", f"/v2/feed-instructions/{hat}", FeedInstructions)
-
-    def _get(self, path: str, response_type: Any, **kwargs: Any) -> Any:
-        return self._request("GET", path, response_type, **kwargs)
-
-    def _post(self, path: str, response_type: Any, **kwargs: Any) -> Any:
-        return self._request("POST", path, response_type, **kwargs)
-
-    def _get_page(self, path: str, page_type: Any, entry_type: Any, **kwargs: Any) -> Any:
-        response = self._http_client.get(path, headers=self._headers(), **kwargs)
-        _raise_for_status(response)
-        entries, next_cursor = list_page_payload(response)
-        return page_type(entries=TypeAdapter(list[entry_type]).validate_python(entries), next_cursor=next_cursor)
-
-    def get_bytes(self, path: str, **kwargs: Any) -> bytes:
-        response = self._http_client.get(path, headers=self._headers(), **kwargs)
-        _raise_for_status(response)
-        return response.content
-
-    def get_text(self, path: str, *, timeout: float | None = None) -> str:
-        response = self._http_client.get(path, headers=self._headers(), timeout=timeout)
-        _raise_for_status(response)
-        return response.text
 
     def sql_query(self, query: str) -> SQLQueryResponse:
         """Run a read-only Observatory query; requires an elevated team user session."""
@@ -1480,16 +1491,16 @@ class CoworldApiClient:
         cursor: str | None = None,
         wait_seconds: float = 0,
     ) -> EpisodeChangePage | EpisodeFeedRetry | EpisodeFeedRestart:
-        response = self._http_client.get(
+        response = self._response(
+            "GET",
             "/v2/episode-requests/changes",
-            headers=self._headers(),
             params=_query_params(ids=ids, view=view, limit=limit, cursor=cursor, wait_seconds=wait_seconds or None),
         )
         if response.status_code == 429 and response.headers.get("Retry-After", "").isdigit():
             return EpisodeFeedRetry(retry_after_seconds=int(response.headers["Retry-After"]))
         if response.status_code in (404, 409, 410):
             return EpisodeFeedRestart(status_code=response.status_code)
-        _raise_for_status(response)
+        self._check_response(response)
         return EpisodeChangePage.model_validate(response.json())
 
     def episode_download_manifest(
@@ -1560,7 +1571,7 @@ class CoworldApiClient:
         with self._http_client.stream("GET", path, headers=self._headers()) as response:
             if response.is_error:
                 response.read()
-                _raise_for_status(response)
+                self._check_response(response)
             response.raise_for_status()
             yield from response.iter_bytes(chunk_size=1024 * 1024)
 

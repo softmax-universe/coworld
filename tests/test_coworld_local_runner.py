@@ -36,6 +36,8 @@ def _game_hosted_job(contents: list[bytes]) -> CoworldEpisodeJobSpec:
                 )
             ),
             game_runnable=CoworldRunnableSpec(type="game", image="game:latest"),
+            player_seats_schema="coworld-player-seats/1",
+            has_player_containers=False,
             players=players,
             game_config={},
             config_schema={},
@@ -119,7 +121,7 @@ def test_local_player_create_uses_its_declared_resource_profile(monkeypatch, tmp
     player = runner_module.PlayerLaunchSpec.from_model(runnable)
     spec = runner_module.EpisodeRunSpec(
         game=runner_module.RunnableLaunchSpec(image="game:latest"),
-        players=[player],
+        players={0: player},
         tokens=["test-token"],
         artifacts=EpisodeArtifacts.create(tmp_path / "work"),
         timeout_seconds=30,

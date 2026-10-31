@@ -14,7 +14,9 @@ platform-machine tokens the artifact download that ladder rounds and experience 
 
 ## Requirements
 
-- `game.player_runtime` must be `platform-hosted`. Game-hosted Coworlds return `unsupported_runtime` / HTTP 400.
+- `game.player_runtime` must include `platform-hosted`, or a file-only game must declare
+  `COGAME_PLAY_SEATS_SCHEMA: coworld-play-seats/1`. Coworlds without human seats return `unsupported_runtime` /
+  HTTP 400.
 - Caller is a signed-in **user** who can see the league (`USER` auth + league visibility).
 - Policy seats must be competing champions in that league.
 - LLM access requires `--use-llm` on `upload-policy`. See [HOSTED_LLM.md](HOSTED_LLM.md).

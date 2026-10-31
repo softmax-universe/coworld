@@ -13,7 +13,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import cast
 
 from pydantic import TypeAdapter
 
@@ -36,7 +35,7 @@ from coworld.runner.runner import (
     generate_tokens,
     stage_player_files,
 )
-from coworld.types import CoworldHumanPlayerSpec, CoworldPlayerFileSpec, CoworldPlayerSeatsSchema
+from coworld.types import CoworldPlayerFileSpec
 
 _IMPORT_DONE_NS = time.monotonic_ns()
 logger = logging.getLogger(__name__)
@@ -58,7 +57,7 @@ def init_config_from_env() -> None:
         COORDINATOR_SPEC_PATH.write_bytes(raw_spec)
         # Reuse the existing operation vocabulary for rolling backend deployments.
         timings.record("setup", spec_write_start)
-        if job.manifest.game.player_runtime == "game-hosted":
+        if job.player_seats_schema is not None:
             stage_start = time.monotonic_ns()
             player_files = [player for player in job.players if isinstance(player, CoworldPlayerFileSpec)]
             raw_player_file_urls = os.environ.get("PLAYER_FILE_URLS")
@@ -95,14 +94,12 @@ def init_config_from_env() -> None:
 
             artifacts = EpisodeArtifacts.create(WORKDIR, prefix="coworld-job-")
             bytes_total = stage_player_files(
-                cast(list[CoworldPlayerFileSpec | CoworldHumanPlayerSpec], job.players),
+                job.players,
                 (lambda slot: cache.read(player_files[slot], lambda: read_player_file(slot)))
                 if cache is not None
                 else read_player_file,
                 artifacts,
-                player_seats_schema=TypeAdapter(CoworldPlayerSeatsSchema).validate_python(
-                    job.game_runnable.env.get("COGAME_PLAYER_SEATS_SCHEMA", "coworld-player-seats/1")
-                ),
+                player_seats_schema=job.player_seats_schema,
             )
             (WORKDIR / "player_file_stage.json").write_text(
                 PlayerFileStageTiming(
@@ -120,7 +117,7 @@ def init_config_from_env() -> None:
             (WORKDIR / "memory-input.json").write_bytes(read_data(scratchpad_uri))
         config_start = time.monotonic_ns()
         tokens = episode_player_tokens(job)
-        if job.manifest.game.player_runtime == "platform-hosted":
+        if job.has_player_containers:
             PLAYER_ARTIFACT_TOKENS_PATH.write_text(json.dumps(generate_tokens(len(job.players))), encoding="utf-8")
         upload_data(
             os.environ["COGAME_CONFIG_URI"],

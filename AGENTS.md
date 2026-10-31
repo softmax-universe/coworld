@@ -14,9 +14,9 @@ troubleshooting: [`HOSTED_LLM.md`](src/coworld/docs/HOSTED_LLM.md).
 ## Choose the player runtime first
 
 Read [PLAYER_RUNTIMES.md](src/coworld/docs/PLAYER_RUNTIMES.md) before designing a new game or player.
-`game.player_runtime` selects Observatory-hosted (`platform-hosted`, default) containers or `game-hosted` files. Both
-use hosted Kubernetes episodes. File execution, isolation, per-seat output, and model-call attribution belong to the
-game in game-hosted mode. Paint Arena is a platform-hosted example, not the only supported runtime.
+`game.player_runtime` accepts `platform-hosted`, `game-hosted`, or a list containing both. Execution follows the roster.
+File execution, isolation, per-seat output, and model-call attribution belong to the game. Historical `player_runtime`
+declarations remain readable. Paint Arena demonstrates container players.
 
 ## Coworlds Expert Agent
 

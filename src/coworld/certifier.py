@@ -9,7 +9,7 @@ import re
 import secrets
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,16 +245,15 @@ def validate_players_ran(package: CoworldPackage, artifacts: EpisodeArtifacts) -
     if not artifacts.game_stdout_path.exists():
         issues.append(f"game.runnable left no launch log at {artifacts.game_stdout_path}")
 
-    game_hosted = package.manifest.game.player_runtime == "game-hosted"
-    if game_hosted:
-        # The game writes each seat's log itself, so every certification slot must show a
-        # real log; the runner's missing-log placeholder means the game never wrote one.
-        for slot in range(len(package.manifest.certification.players)):
-            log_path = artifacts.policy_log_path(slot)
-            if not log_path.exists():
-                issues.append(f"Certification player slot {slot} left no launch log")
-            elif log_path.read_text(encoding="utf-8") == GAME_HOSTED_PLAYER_LOG_MISSING:
-                issues.append(f"Certification player slot {slot} left only the missing-log marker")
+    # File players must write a real log for every fixture slot.
+    for slot, selected in enumerate(_certification_player_selection(package)):
+        if selected.file is None:
+            continue
+        log_path = artifacts.policy_log_path(slot)
+        if not log_path.exists():
+            issues.append(f"Certification player slot {slot} left no launch log")
+        elif log_path.read_text(encoding="utf-8") == GAME_HOSTED_PLAYER_LOG_MISSING:
+            issues.append(f"Certification player slot {slot} left only the missing-log marker")
 
     # Every declared player must be seated by the certification fixture in both runtimes;
     # a bundled player with no slot was never exercised.
@@ -266,7 +265,7 @@ def validate_players_ran(package: CoworldPackage, artifacts: EpisodeArtifacts) -
         slots = slots_by_player_id.get(player.id, [])
         if not slots:
             issues.append(f"Coworld player[{index}] ({player.id!r}) has no certification slot, so it never ran")
-        elif not game_hosted and not any(artifacts.policy_log_path(slot).exists() for slot in slots):
+        elif player.file is None and not any(artifacts.policy_log_path(slot).exists() for slot in slots):
             issues.append(f"Coworld player[{index}] ({player.id!r}) left no launch log for slots {slots}")
 
     if issues:
@@ -422,6 +421,7 @@ def build_manifest_episode_job_spec(
     player_images: list[str] | None = None,
     player_run: list[str] | None = None,
     player_files: Sequence[Path] | None = None,
+    player_files_by_slot: Mapping[int, Path] | None = None,
 ) -> CoworldEpisodeJobSpec:
     if variant_id is None:
         game_config = copy.deepcopy(package.manifest.certification.game_config)
@@ -443,11 +443,11 @@ def build_manifest_episode_job_spec(
                 f"cannot infer player count for variant {variant_id!r}: "
                 "declare game_config.players or fixed game.config_schema.properties.tokens bounds"
             )
-    if package.manifest.game.player_runtime == "game-hosted" and (player_images or player_run):
-        raise ValueError("game-hosted Coworlds do not support player image or run overrides")
+    if "container" not in package.manifest.game.supported_player_types and (player_images or player_run):
+        raise ValueError("This Coworld does not accept container players")
     if player_files is not None:
-        if package.manifest.game.player_runtime != "game-hosted":
-            raise ValueError("player file overrides apply only to game-hosted Coworlds")
+        if "file" not in package.manifest.game.supported_player_types:
+            raise ValueError("This Coworld does not accept file players")
         if len(player_files) != slot_count:
             raise ValueError(f"expected {slot_count} player file paths, got {len(player_files)}")
         # Overrides replace the bundled fixtures entirely, so the fixtures are never read.
@@ -475,8 +475,18 @@ def build_manifest_episode_job_spec(
         player_update = {"run": list(player_run)} if player_run is not None else {}
         players = [
             players[slot].model_copy(deep=True, update={"image": image, **player_update})
+            if isinstance(players[slot], CoworldRunnableSpec)
+            else CoworldRunnableSpec(type="player", image=image, run=list(player_run or []))
             for slot, image in enumerate(slot_images)
         ]
+
+    if player_files_by_slot:
+        if "file" not in package.manifest.game.supported_player_types:
+            raise ValueError("This Coworld does not accept file players")
+        for slot, path in player_files_by_slot.items():
+            if not 0 <= slot < slot_count:
+                raise ValueError(f"player file slot {slot} is outside the {slot_count}-seat roster")
+            players[slot] = _player_file_spec(path)
 
     return CoworldEpisodeJobSpec(
         manifest=package.manifest.for_episode(variant_id),
@@ -727,9 +737,7 @@ def _run_local_certifier_episode(
         verify_replay=False,
         validate_results=False,
         player_file_paths=(
-            certification_player_file_paths(package, len(job.players))
-            if job.manifest.game.player_runtime == "game-hosted"
-            else None
+            episode_player_file_paths(package, job.players) if job.player_seats_schema is not None else None
         ),
         require_websocket_pong=True,
     )
@@ -1126,17 +1134,25 @@ def _player_file_spec(source: Path, *, package_root: Path | None = None) -> Cowo
     )
 
 
-def certification_player_file_paths(package: CoworldPackage, slot_count: int) -> list[Path]:
-    """Package-relative fixture files for a local game-hosted run, cycled to ``slot_count`` seats.
-
-    Shared by ``run-episode`` (when no overrides are given) and local certification so
-    both select the same sources; digest-only references cannot be staged locally.
-    """
-    files = [cast(str, player.file) for player in _certification_player_selection(package)]
-    if any(file.startswith("sha256:") for file in files):
+def episode_player_file_paths(
+    package: CoworldPackage,
+    players: Sequence[CoworldEpisodePlayerSpec],
+    overrides: Sequence[Path] = (),
+) -> list[Path]:
+    """Resolve only file seats, in episode order, including mixed-roster overrides."""
+    requested = {player.content_hash for player in players if isinstance(player, CoworldPlayerFileSpec)}
+    if not requested:
+        return []
+    paths_by_hash = {_player_file_spec(path).content_hash: path for path in overrides}
+    for player in package.manifest.player:
+        if requested <= paths_by_hash.keys():
+            break
+        if player.file is not None and not player.file.startswith("sha256:"):
+            path = package.manifest_path.parent / player.file
+            paths_by_hash[_player_file_spec(path).content_hash] = path
+    if requested - paths_by_hash.keys():
         raise InvalidPlayerFile("local certification needs package-relative player files; use `coworld download` first")
-    fixture_paths = [package.manifest_path.parent / file for file in files]
-    return [fixture_paths[index % len(fixture_paths)] for index in range(slot_count)]
+    return [paths_by_hash[player.content_hash] for player in players if isinstance(player, CoworldPlayerFileSpec)]
 
 
 def _certification_player_specs(package: CoworldPackage) -> list[CoworldEpisodePlayerSpec]:

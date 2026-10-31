@@ -42,6 +42,7 @@ from coworld.trajectory import trajectory_identity_env
 from coworld.types import (
     CoworldEpisodeJobSpec,
     CoworldHumanPlayerSpec,
+    CoworldPlayContainerSeat,
     CoworldPlayerFileSpec,
     CoworldPlayerSeat,
     CoworldPlayerSeats,
@@ -195,7 +196,7 @@ class LocalContainerResources(BaseModel):
 @dataclass(frozen=True)
 class EpisodeRunSpec:
     game: RunnableLaunchSpec
-    players: list[PlayerLaunchSpec]
+    players: Mapping[int, PlayerLaunchSpec]
     tokens: list[str]
     artifacts: EpisodeArtifacts
     timeout_seconds: float
@@ -374,14 +375,12 @@ def run_coworld_episode(
         raise ValueError("Human player seats require the hosted Kubernetes episode runner")
     if resource_admission is not None and resource_admission.root.is_relative_to(artifacts.workspace.resolve()):
         raise ValueError("Resource admission must remain outside the game-mounted workspace")
-    if game_sandbox is not None and (
-        isolated_network_image is None or job.manifest.game.player_runtime != "game-hosted"
-    ):
+    if game_sandbox is not None and (isolated_network_image is None or job.has_player_containers):
         raise ValueError("Game sandbox requires isolated networking and game-hosted file players")
     secrets_by_slot = player_secret_env or {}
     if set(secrets_by_slot) - set(range(len(job.players))):
         raise ValueError("Player secrets name an unoccupied slot")
-    if secrets_by_slot and job.manifest.game.player_runtime != "platform-hosted":
+    if any(not isinstance(job.players[slot], CoworldRunnableSpec) for slot in secrets_by_slot):
         raise ValueError("Per-player secrets require container players")
     assert_episode_images_reachable(job)
     tokens = generate_tokens(len(job.players))
@@ -400,18 +399,18 @@ def run_coworld_episode(
             **training_environment(job.manifest, job.game_runnable, image=launch_game.image),
         },
     )
-    if job.manifest.game.player_runtime == "game-hosted":
-        player_files = [player for player in job.players if isinstance(player, CoworldPlayerFileSpec)]
-        if player_file_paths is None or len(player_file_paths) != len(player_files):
-            raise ValueError(f"game-hosted execution requires {len(player_files)} player file paths")
+    if job.player_seats_schema is not None:
+        paths = player_file_paths or []
+        file_count = sum(isinstance(player, CoworldPlayerFileSpec) for player in job.players)
+        if len(paths) != file_count:
+            raise ValueError(f"game-hosted execution requires {file_count} player file paths")
         stage_player_files(
-            player_files,
-            lambda slot: player_file_bytes(player_file_paths[slot]),
+            job.players,
+            lambda slot: player_file_bytes(paths[slot]),
             artifacts,
-            player_seats_schema=TypeAdapter(CoworldPlayerSeatsSchema).validate_python(
-                job.game_runnable.env.get("COGAME_PLAYER_SEATS_SCHEMA", "coworld-player-seats/1")
-            ),
+            player_seats_schema=job.player_seats_schema,
         )
+    if not job.has_player_containers:
         run_game_hosted_container(
             launch_game,
             len(tokens),
@@ -425,22 +424,24 @@ def run_coworld_episode(
             isolated_network_image=isolated_network_image,
             resource_admission=resource_admission,
         )
+        if job.player_seats_schema == "coworld-play-seats/2":
+            collect_local_player_status({}, len(job.players), artifacts.workspace)
     else:
-        if player_file_paths is not None:
+        if player_file_paths is not None and job.player_seats_schema is None:
             raise ValueError("player_file_paths are supported only for game-hosted execution")
         run_spec = EpisodeRunSpec(
             isolated_network_image=isolated_network_image,
             resource_admission=resource_admission,
             require_websocket_pong=require_websocket_pong,
             game=launch_game,
-            players=[
-                replace(
+            players={
+                slot: replace(
                     PlayerLaunchSpec.from_model(player),
                     secret_env=secrets_by_slot[slot] if slot in secrets_by_slot else {},
                 )
                 for slot, player in enumerate(job.players)
                 if isinstance(player, CoworldRunnableSpec)
-            ],
+            },
             tokens=tokens,
             artifacts=artifacts,
             timeout_seconds=timeout_seconds,
@@ -466,7 +467,7 @@ def run_coworld_episode(
 
 
 def stage_player_files(
-    players: Sequence[CoworldPlayerFileSpec | CoworldHumanPlayerSpec],
+    players: Sequence[CoworldPlayerFileSpec | CoworldHumanPlayerSpec | CoworldRunnableSpec],
     read_player_file: Callable[[int], bytes],
     artifacts: EpisodeArtifacts,
     *,
@@ -481,14 +482,19 @@ def stage_player_files(
     ``coworld-play-seats/1`` (the hosted-play document) with the seat tagged
     ``kind: "human"`` and every policy seat tagged ``kind: "policy"``.
     """
-    seats: list[CoworldPlayerSeat | CoworldPlayPolicySeat | CoworldPlayHumanSeat] = []
+    seats: list[CoworldPlayerSeat | CoworldPlayPolicySeat | CoworldPlayHumanSeat | CoworldPlayContainerSeat] = []
     bytes_total = 0
     staged_by_hash: dict[str, Path] = {}
-    mixed = any(isinstance(player, CoworldHumanPlayerSpec) for player in players)
+    mixed = player_seats_schema == "coworld-play-seats/2" or any(
+        isinstance(player, CoworldHumanPlayerSpec | CoworldRunnableSpec) for player in players
+    )
     file_index = 0
     for slot, player in enumerate(players):
         if isinstance(player, CoworldHumanPlayerSpec):
             seats.append(CoworldPlayHumanSeat(slot=slot))
+            continue
+        if isinstance(player, CoworldRunnableSpec):
+            seats.append(CoworldPlayContainerSeat(slot=slot))
             continue
         player_path = artifacts.player_file_path(slot)
         player_path.parent.mkdir(parents=True, exist_ok=True)
@@ -514,7 +520,7 @@ def stage_player_files(
             "artifact_uri": f"file://{CONTAINER_WORKDIR}/policy_artifact_{slot}.zip",
             "annotations_uri": (
                 f"file://{CONTAINER_WORKDIR}/policy_annotations_{slot}.jsonl"
-                if player_seats_schema == "coworld-player-seats/2"
+                if player_seats_schema in {"coworld-player-seats/2", "coworld-play-seats/2"}
                 else None
             ),
         }
@@ -525,9 +531,12 @@ def stage_player_files(
         )
     artifacts.player_seats_path.write_text(
         CoworldPlayerSeats(
-            schema="coworld-play-seats/1" if mixed else player_seats_schema,
+            schema=player_seats_schema
+            if player_seats_schema == "coworld-play-seats/2"
+            else ("coworld-play-seats/1" if mixed else player_seats_schema),
             seats=seats,
-            player_status_uri=f"file://{CONTAINER_WORKDIR}/player_status.json",
+            player_status_uri=f"file://{CONTAINER_WORKDIR}/"
+            + ("game_player_status.json" if player_seats_schema == "coworld-play-seats/2" else "player_status.json"),
         ).model_dump_json(by_alias=True, exclude_none=True, indent=2),
         encoding="utf-8",
     )
@@ -1034,8 +1043,8 @@ def run_episode_containers(
     run_id = secrets.token_hex(8)
     game_network_alias = f"{LOCAL_GAME_NETWORK_ALIAS_PREFIX}{run_id}"
     game_container = f"{spec.container_prefix}-game-{run_id}"
-    player_containers: list[str] = []
-    player_processes: list[tuple[subprocess.Popen[str], Path]] = []
+    player_containers: dict[int, str] = {}
+    player_processes: dict[int, tuple[subprocess.Popen[str], Path]] = {}
 
     with local_episode_network(
         spec.isolated_network_image,
@@ -1048,8 +1057,8 @@ def run_episode_containers(
             with ExitStack() as stack:
                 game_stdout = stack.enter_context(spec.artifacts.game_stdout_path.open("w"))
                 game_stderr = stack.enter_context(spec.artifacts.game_stderr_path.open("w"))
-                player_logs = []
-                for slot, player in enumerate(spec.players):
+                player_logs = {}
+                for slot, player in spec.players.items():
                     private_env = {**spec.secret_env, **player.secret_env}
                     secret_env_key_args = [arg for key in private_env for arg in ("-e", key)]
                     player_subprocess_env = {**os.environ, **private_env} if private_env else None
@@ -1105,7 +1114,7 @@ def run_episode_containers(
                         ],
                         env=player_subprocess_env,
                     )
-                    player_containers.append(container_name)
+                    player_containers[slot] = container_name
                     with tempfile.TemporaryDirectory(prefix="coworld-artifact-init-") as staging:
                         artifact_dir = Path(staging) / "coworld-artifact"
                         artifact_dir.mkdir(mode=0o777)
@@ -1114,7 +1123,7 @@ def run_episode_containers(
                             ["docker", "cp", str(artifact_dir), f"{container_name}:/"],
                             check=True,
                         )
-                    player_logs.append(player_log)
+                    player_logs[slot] = player_log
 
                 def start_player(slot: int) -> tuple[subprocess.Popen[str], Path]:
                     return (
@@ -1128,7 +1137,7 @@ def run_episode_containers(
                     )
 
                 warming = {
-                    slot: start_player(slot) for slot, player in enumerate(spec.players) if player.startup is not None
+                    slot: start_player(slot) for slot, player in spec.players.items() if player.startup is not None
                 }
                 warmup_started = time.monotonic()
                 for slot, (process, log_path) in warming.items():
@@ -1159,7 +1168,7 @@ def run_episode_containers(
                         container_name=game_container,
                         network_alias=game_network_alias,
                         local_ports=local_ports,
-                        include_player_seats=False,
+                        include_player_seats=spec.artifacts.player_seats_path.is_file(),
                         network=network.name,
                         offline_dns=network.control_image is not None,
                         isolation_owner=network.owner if network.control_image is not None else None,
@@ -1181,15 +1190,20 @@ def run_episode_containers(
                 _wait_for_health(
                     port, game_process, spec.artifacts.game_stderr_path, timeout_seconds=spec.timeout_seconds
                 )
-                network.record(spec.artifacts.workspace / "isolation.json", [game_container, *player_containers])
+                network.record(
+                    spec.artifacts.workspace / "isolation.json", [game_container, *player_containers.values()]
+                )
                 if spec.players:
-                    _require_http_ok(_player_client_url(port, 0, spec.tokens[0]))
-                    asyncio.run(_require_bad_player_rejected(f"ws://127.0.0.1:{port}/player?slot=0&token=bad"))
+                    first_slot = next(iter(spec.players))
+                    _require_http_ok(_player_client_url(port, first_slot, spec.tokens[first_slot]))
+                    asyncio.run(
+                        _require_bad_player_rejected(f"ws://127.0.0.1:{port}/player?slot={first_slot}&token=bad")
+                    )
                 _require_http_ok(f"http://127.0.0.1:{port}/client/global")
 
-                player_processes = [
-                    warming[slot] if slot in warming else start_player(slot) for slot in range(len(spec.players))
-                ]
+                player_processes = {
+                    slot: warming[slot] if slot in warming else start_player(slot) for slot in spec.players
+                }
 
                 asyncio.run(
                     _require_global_message(
@@ -1199,17 +1213,29 @@ def run_episode_containers(
                         require_pong=spec.require_websocket_pong,
                     )
                 )
-                _wait_for_game_exit(game_process, spec.artifacts.game_stderr_path, timeout_seconds=spec.timeout_seconds)
                 required_artifacts = (
                     (spec.artifacts.results_path, spec.artifacts.replay_path)
                     if verify_replay
                     else (spec.artifacts.results_path,)
                 )
-                _raise_if_game_declared_player_failure(
-                    spec.artifacts, required_artifacts, player_count=len(spec.players)
-                )
+                if spec.artifacts.player_seats_path.is_file():
+                    _wait_for_game_results_or_exit(
+                        game_process,
+                        spec.artifacts,
+                        required_artifacts,
+                        player_count=len(spec.tokens),
+                        timeout_seconds=spec.timeout_seconds,
+                        require_artifacts_on_exit=True,
+                    )
+                else:
+                    _wait_for_game_exit(
+                        game_process, spec.artifacts.game_stderr_path, timeout_seconds=spec.timeout_seconds
+                    )
+                    _raise_if_game_declared_player_failure(
+                        spec.artifacts, required_artifacts, player_count=len(spec.tokens)
+                    )
 
-                for slot, (player_process, player_stderr_path) in enumerate(player_processes):
+                for slot, (player_process, player_stderr_path) in player_processes.items():
                     _wait_for_player_exit(player_process, player_stderr_path, failed_policy_index=slot)
 
                 if not verify_replay or static_replay_viewer:
@@ -1226,10 +1252,10 @@ def run_episode_containers(
         finally:
             try:
                 try:
-                    collect_local_player_status(player_containers, len(spec.players), spec.artifacts.workspace)
+                    collect_local_player_status(player_containers, len(spec.tokens), spec.artifacts.workspace)
                 finally:
                     collect_game_trajectory(game_container, spec.artifacts)
-                    for slot, container_name in enumerate(player_containers):
+                    for slot, container_name in player_containers.items():
                         subprocess.run(
                             ["docker", "stop", "--time", "0", container_name],
                             stdout=subprocess.DEVNULL,
@@ -1257,7 +1283,7 @@ def run_episode_containers(
                                         ):
                                             shutil.copyfileobj(source, destination)
             finally:
-                for container_name in player_containers:
+                for container_name in player_containers.values():
                     subprocess.run(
                         ["docker", "rm", "-f", "-v", container_name],
                         stdout=subprocess.DEVNULL,
@@ -1680,12 +1706,12 @@ def _read_game_declared_player_failure(
 
 
 def _raise_if_local_player_exited(
-    player_processes: list[tuple[subprocess.Popen[str], Path]],
+    player_processes: Mapping[int, tuple[subprocess.Popen[str], Path]],
 ) -> None:
     """Non-blocking probe: if a player container has already exited non-zero, raise
     player_error for it. Used when a downstream game check stalls so an early player
     crash is attributed to the player, not the game."""
-    for slot, (player_process, stderr_path) in enumerate(player_processes):
+    for slot, (player_process, stderr_path) in player_processes.items():
         return_code = player_process.poll()
         if return_code is not None and return_code != 0:
             raise RunnerEpisodeError(

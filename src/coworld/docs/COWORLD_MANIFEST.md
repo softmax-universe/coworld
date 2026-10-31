@@ -91,7 +91,7 @@ For a new Coworld, start from the Paint Arena manifest template and keep the gen
 1. Fill in `game` metadata, docs, protocols, config schema, results schema, and game runnable. If replays should run
    entirely in the browser, add `game.replay_viewer.bundle` using the
    [static replay-viewer guide](STATIC_REPLAY_VIEWERS.md).
-2. Choose `game.player_runtime`, then add matching bundled players for examples, certification, and local play.
+2. Declare `game.player_runtime`, then add matching bundled players for examples, certification, and local play.
 3. Add reporter references when the Coworld ships bespoke reporting (reporter v2, spec 0061). Reporter entries are
    references — a platform reporter version (`"reporter": "owner/name@version"`, owner-qualified because reporter names
    are only unique per owner) or a wasm component your build produces (at publish time the CLI registers a reporter
@@ -152,12 +152,12 @@ examples show only the runtime-related fields; they are not complete manifests.
 
 ## Player Runtime And Artifact Pairing
 
-`game.player_runtime` is `platform-hosted` by default. It has two valid shapes:
+`game.player_runtime` accepts `platform-hosted`, `game-hosted`, or a list containing both. For example:
 
 ```json
 {
   "game": {
-    "player_runtime": "platform-hosted",
+    "player_runtime": ["platform-hosted"],
     "runnable": { "type": "game", "image": "example-game:latest" }
   },
   "player": [
@@ -175,7 +175,7 @@ examples show only the runtime-related fields; they are not complete manifests.
 ```json
 {
   "game": {
-    "player_runtime": "game-hosted",
+    "player_runtime": ["game-hosted"],
     "runnable": { "type": "game", "image": "example-game:latest" }
   },
   "player": [
@@ -194,7 +194,10 @@ Every manifest role entry defines exactly one of `image` or `file`. Only player 
 must be a package-relative path or an uploaded `sha256:<64 lowercase hex characters>` reference. Absolute paths,
 `.`/`..` path components, and malformed digests are rejected.
 
-Every player entry must match the game mode. Platform-hosted players use `image`; game-hosted players use `file`.
+Every bundled player must use an accepted artifact type. Declare `["platform-hosted", "game-hosted"]` to accept both.
+The selected roster determines execution, including all-file pool eligibility. Historical `player_runtime` declarations
+remain readable with their existing meaning; new authors should use its list form. Read the
+[player guide](PLAYER_RUNTIMES.md#files-containers-and-people) for startup and private-output responsibilities.
 `coworld upload-coworld` uploads package-relative files, rejects files, total directory contents, or packed ZIPs over
 100 MiB (104,857,600 bytes), and replaces each path with its content digest. A directory reference is converted to a
 deterministic zip before hashing.

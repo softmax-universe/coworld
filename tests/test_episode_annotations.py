@@ -7,7 +7,7 @@ from coworld.annotations import ANNOTATIONS_TARGETS_ENV, EpisodeAnnotation, anno
 from coworld.runner import kubernetes_runner
 from coworld.runner.phase_timings import EpisodePhaseTimings
 from coworld.runner.runner import EpisodeArtifacts
-from coworld.types import CoworldEpisodeJobSpec
+from coworld.types import CoworldEpisodeJobSpec, CoworldPlayerFileSpec
 
 
 def test_game_hosted_annotations_are_optional_and_reach_storage(monkeypatch, tmp_path):
@@ -15,18 +15,21 @@ def test_game_hosted_annotations_are_optional_and_reach_storage(monkeypatch, tmp
     monkeypatch.setenv(ANNOTATIONS_TARGETS_ENV, json.dumps({"0": stored.as_uri()}))
     monkeypatch.delenv("PLAYER_ARTIFACT_UPLOAD_URLS", raising=False)
     artifacts = EpisodeArtifacts.create(tmp_path)
-    kubernetes_runner._prepare_game_hosted_outputs(
-        cast(CoworldEpisodeJobSpec, SimpleNamespace(players=[object()])), artifacts, EpisodePhaseTimings()
+    job = cast(
+        CoworldEpisodeJobSpec,
+        SimpleNamespace(
+            players=[CoworldPlayerFileSpec(type="player-file", content_hash="a" * 64, size_bytes=1)],
+            player_seats_schema="coworld-player-seats/1",
+        ),
     )
-    assert kubernetes_runner._upload_player_artifacts(artifacts) == 0
+    kubernetes_runner._prepare_game_hosted_outputs(job, artifacts, EpisodePhaseTimings())
+    assert kubernetes_runner._upload_player_artifacts(artifacts, slots=frozenset({0})) == 0
     assert not stored.exists()
     event = EpisodeAnnotation(time=258, kind="intent", function="selectTarget", args={"target": "foo"})
     payload = event.model_dump_json(exclude_none=True).encode() + b"\n"
     artifacts.policy_annotations_path(0).write_bytes(payload)
-    kubernetes_runner._prepare_game_hosted_outputs(
-        cast(CoworldEpisodeJobSpec, SimpleNamespace(players=[object()])), artifacts, EpisodePhaseTimings()
-    )
-    assert kubernetes_runner._upload_player_artifacts(artifacts) == 0
+    kubernetes_runner._prepare_game_hosted_outputs(job, artifacts, EpisodePhaseTimings())
+    assert kubernetes_runner._upload_player_artifacts(artifacts, slots=frozenset({0})) == 0
     assert stored.read_bytes() == payload
     records = list(read_annotations(BytesIO(payload), participant_slot=0))
     assert json.loads(records[0]) == event.model_dump(exclude_none=True) | {"participant_slot": 0, "seq": 0}

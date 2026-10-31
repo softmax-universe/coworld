@@ -1,7 +1,7 @@
 # Coworld Episode Runner
 
 `coworld.runner.runner` is the local Docker runner for one Coworld episode. It always starts the game container. It
-starts player containers only when `game.player_runtime` is `platform-hosted`.
+starts player containers only for the selected platform-hosted seats.
 
 By default, the runner creates or reuses one Docker network named `coworld-local`. Game containers publish browser/debug
 routes on `127.0.0.1:<port>` and also join that network as `coworld-game-<run-id>`. Player containers join the same

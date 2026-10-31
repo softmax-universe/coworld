@@ -63,6 +63,29 @@ The game process can read every staged player file. Submitting a file policy to 
 those bytes with code controlled by the Coworld author. Use a platform-hosted Coworld when that trust boundary is not
 acceptable.
 
+## Player type rosters
+
+A game declaring a `game.player_runtime` list always receives `coworld-play-seats/2`, including episodes with no file
+players or no people. Every seat has an explicit `kind`: `policy` for a staged file, `container` for a platform-launched
+player, or `human`. File seats keep the file metadata and output fields above, including optional annotations. Container
+and human entries carry only `slot` and `kind`; the game must not try to load a file for them.
+
+```json
+{
+  "schema": "coworld-play-seats/2",
+  "seats": [
+    { "slot": 0, "kind": "container" },
+    { "slot": 1, "kind": "human" }
+  ],
+  "player_status_uri": "file:///coworld/game_player_status.json"
+}
+```
+
+The runner preserves episode slot numbers when launching containers and staging files. The game uses the ordered config
+tokens for container and human WebSocket connections. Only file-seat status entries from the game are combined with
+platform-observed container status; the game cannot replace a container's status using this document. The original
+`coworld-player-seats/1`, `/2`, and `coworld-play-seats/1` wire formats remain unchanged.
+
 Player logs and artifacts remain policy-scoped after upload, but the game must keep seat output separate. Never copy
 player output into game stdout or stderr because game logs may be visible to anyone who can access the episode.
 

@@ -56,3 +56,7 @@
   kind: compatible
   summary: Optional on-demand placement for game and player containers; omitted capacity retains platform scheduling.
   fixture: packages/coworld/tests/manifest_versions/v1/on_demand_capacity_manifest.json
+- schema_hash: 67e11b26a1fe7582e882f7593f7fa40a3670ae91634f82ef214ca7db0c344417
+  kind: compatible
+  summary: Optional per-variant task environments preserve task-specific images and resources in population leagues.
+  fixture: packages/coworld/tests/manifest_versions/v1/variant_task_environments_manifest.json

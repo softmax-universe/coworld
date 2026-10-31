@@ -306,7 +306,7 @@ def resolve_registry_image_ref(image: str) -> str:
 
 
 def _manifest_images(manifest: CoworldManifest) -> tuple[str, ...]:
-    images = [manifest.game.runnable.image, *(task.image for task in manifest.game.task_environments.values())]
+    images = [manifest.game.runnable.image, *(task.image for task in manifest.iter_task_environments())]
     for section in ROLE_SECTIONS:
         images.extend(runnable.image for runnable in getattr(manifest, section) if runnable.image is not None)
     return tuple(dict.fromkeys(images))
@@ -324,7 +324,16 @@ def _with_image_tags(manifest: CoworldManifest, image_tags: dict[str, str]) -> C
             ),
         }
     )
-    updates: dict[str, object] = {"game": game}
+    variants = []
+    for variant in manifest.variants:
+        if variant.task_environments is not None:
+            task_environments = {
+                name: task.model_copy(update={"image": image_tags.get(task.image, task.image)})
+                for name, task in variant.task_environments.items()
+            }
+            variant = variant.model_copy(update={"task_environments": task_environments})
+        variants.append(variant)
+    updates: dict[str, object] = {"game": game, "variants": variants}
     for section in ROLE_SECTIONS:
         updates[section] = [
             runnable

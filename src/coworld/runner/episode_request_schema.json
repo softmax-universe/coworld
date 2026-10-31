@@ -1294,6 +1294,25 @@
           "minLength": 1,
           "title": "Description",
           "type": "string"
+        },
+        "task_environments": {
+          "anyOf": [
+            {
+              "maxProperties": 2,
+              "patternProperties": {
+                "^[A-Za-z0-9_-]{1,64}$": {
+                  "$ref": "#/$defs/CoworldTaskEnvironment"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Task environments for this variant. Replaces game.task_environments for its episodes; null inherits the game definitions, and an empty object disables task environments.",
+          "title": "Task Environments"
         }
       },
       "required": ["id", "name", "game_config", "description"],

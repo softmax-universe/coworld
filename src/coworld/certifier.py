@@ -479,7 +479,7 @@ def build_manifest_episode_job_spec(
         ]
 
     return CoworldEpisodeJobSpec(
-        manifest=package.manifest.model_copy(deep=True),
+        manifest=package.manifest.for_episode(variant_id),
         game_config=game_config,
         players=cast(list[CoworldEpisodePlayerSpec], players),
         episode_tags={"source": CERTIFICATION_EPISODE_SOURCE},

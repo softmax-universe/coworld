@@ -1,0 +1,81 @@
+{
+  "game": {
+    "name": "minimal-coworld",
+    "version": "1.0.0",
+    "description": "Minimal legacy-compatible Coworld manifest.",
+    "owner": "coworld@example.com",
+    "config_schema": {},
+    "results_schema": {},
+    "runnable": {
+      "type": "game",
+      "image": "example.com/minimal-game:1"
+    },
+    "protocols": {
+      "player": {
+        "type": "text",
+        "value": "Player protocol"
+      },
+      "global": {
+        "type": "text",
+        "value": "Global protocol"
+      }
+    },
+    "docs": {
+      "readme": {
+        "type": "text",
+        "value": "Minimal Coworld"
+      }
+    }
+  },
+  "player": [
+    {
+      "type": "player",
+      "image": "example.com/minimal-player:1",
+      "id": "minimal-player",
+      "name": "Minimal Player",
+      "description": "Minimal bundled player."
+    }
+  ],
+  "variants": [
+    {
+      "id": "task-a",
+      "name": "Task A",
+      "game_config": {},
+      "description": "Minimal variant.",
+      "task_environments": {
+        "agent": {
+          "image": "example/task@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "cpu_millis": 1000,
+          "memory_mib": 128,
+          "storage_mib": 64,
+          "max_instances": 1,
+          "network": "no-network"
+        }
+      }
+    },
+    {
+      "id": "task-b",
+      "name": "Task B",
+      "game_config": {},
+      "description": "Minimal variant.",
+      "task_environments": {
+        "agent": {
+          "image": "example/task@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cpu_millis": 2000,
+          "memory_mib": 192,
+          "storage_mib": 64,
+          "max_instances": 1,
+          "network": "no-network"
+        }
+      }
+    }
+  ],
+  "certification": {
+    "game_config": {},
+    "players": [
+      {
+        "player_id": "minimal-player"
+      }
+    ]
+  }
+}

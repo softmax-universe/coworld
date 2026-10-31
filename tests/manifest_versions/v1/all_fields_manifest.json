@@ -224,7 +224,8 @@
       "game_config": {
         "mode": "golden"
       },
-      "description": "Golden default variant."
+      "description": "Golden default variant.",
+      "task_environments": null
     }
   ],
   "certification": {

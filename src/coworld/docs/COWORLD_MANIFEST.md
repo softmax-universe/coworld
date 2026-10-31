@@ -218,6 +218,11 @@ container or a human at a seat:
 in a separate pod with a pinned image, explicit resources, and the episode's absolute expiry. Tasks are not player
 seats. The game owns prompts, scoring, and replay; task programs receive no game credentials or Kubernetes credentials.
 
+`variants[].task_environments` optionally replaces these definitions for that variant. Omitted or `null` values inherit
+the game defaults; `{}` disables task environments for that variant. Use this for benchmark tasks requiring different
+images or resource budgets. Definitions are selected before image resolution and admission, then frozen in the episode
+snapshot. Unselected task definitions are excluded from that snapshot. Certification uses the game defaults.
+
 For example, this fragment requests an offline coding evaluator:
 
 ```json

@@ -554,6 +554,7 @@ class V2EpisodeRequestListRow(CoworldAPIModel):
     mod_name: str | None = None
     env_config_name: str | None = None
     coworld_id: str | None = None
+    variant_id: str | None = None
     seed: int | None = None
     max_steps: int | None = None
     status: str

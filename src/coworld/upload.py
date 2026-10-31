@@ -1170,7 +1170,7 @@ def upload_coworld(
 
         certification_key = _certification_cache_key(package.manifest_path, manifest=manifest)
         certified_manifests = _load_string_cache(_certified_manifest_cache_path())
-        if package.manifest.game.task_environments:
+        if any(package.manifest.iter_task_environments()):
             # Task control belongs to the hosted coordinator. Local Docker cannot
             # certify it; the ordinary hosted gate must qualify this candidate.
             # Do not record a local certification cache entry for this path.
@@ -1952,6 +1952,9 @@ def _manifest_image_fields(value: dict[str, Any]) -> list[dict[str, Any]]:
     fields = [game["runnable"]]
     if "task_environments" in game:
         fields.extend(game["task_environments"].values())
+    for variant in value["variants"]:
+        if "task_environments" in variant and variant["task_environments"] is not None:
+            fields.extend(variant["task_environments"].values())
     for section in MANIFEST_ROLE_SECTIONS:
         if section in value:
             fields.extend(row for row in value[section] if "image" in row and row["image"] is not None)

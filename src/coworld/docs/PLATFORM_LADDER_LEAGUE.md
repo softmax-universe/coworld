@@ -267,6 +267,58 @@ freezes the configured versions, so later policy uploads do not change the refer
 the benchmark's released reference policies where available; a substitute roster defines a different evaluation
 condition.
 
+## Benchmark population leagues
+
+Publish one immutable Coworld release per benchmark, with one variant per task. For example, SWE-bench tasks become
+variants of one SWE-bench Coworld; Terminal-Bench tasks become variants of one Terminal-Bench Coworld. Each variant
+contains the native task ID, `game_config`, and optional `task_environments` for its own pinned image and resources.
+Keep certification's task configuration and environment in the game defaults.
+
+This uses the ordinary Coworld variant model and existing continuous-grading planner. For comparison,
+[Sugarscape](https://github.com/Metta-AI/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
+declares five variants; its Solo/Duos modes sample an 80-scenario pool inside the selected variant's game configuration.
+A benchmark population instead declares each task as a variant and grades every variant. Each task runs in a separate
+episode; the Coworld release and league group those episodes, and ordinary admission controls their concurrency.
+
+Create one league after promoting that release to canonical. Enable its game-version lock through
+`POST /v2/leagues/{league_id}/locks` with `{"game_version_locked": true, "submissions_locked": false}`. This pins the
+current canonical Coworld. Then configure its ladder:
+
+```json
+{
+  "enabled": true,
+  "fulfillment": { "retry_times": 0, "allowed_failures": 0 },
+  "ranking": {
+    "algorithm": "score",
+    "standing_aggregation": "latest",
+    "round_scoring_rule": "mean"
+  },
+  "continuous": {
+    "enabled": true,
+    "scope": "entries",
+    "all_variants": true,
+    "seats_per_episode": 1,
+    "max_policies_per_round": 1,
+    "regrade_interval_minutes": null
+  },
+  "divisions": [{ "division_id": "div_...", "name": "Competition" }]
+}
+```
+
+One submission plans one episode per task and receives their mean score. Use comparable per-task scores, such as binary
+solve rates; benchmarks with weighted or question-level scoring need their native aggregation instead. The benchmark
+standings publish a grade only after every task completes successfully, exactly once. A partial or failed population is
+not a complete benchmark score. Episode and round episode responses expose `variant_id` for task-level inspection
+alongside the display name.
+
+The current planner supports up to 1,000 episodes per round; manifest uploads support up to 4 MiB. Existing admission,
+funding, episode deadlines, and the 24-hour round deadline still apply. Qualify throughput against the complete native
+population before enrolling a large benchmark. Never shorten tasks or omit unsupported IDs to fit those limits.
+
+Publish changed datasets, images, or budgets as a new release. Do not combine scores across releases or rewrite old task
+leagues. After qualifying the consolidated league, retire its task leagues while preserving their episodes and
+historical grades. This platform support does not automatically migrate existing leagues or qualify native tasks.
+
 ## Eval leagues (round on new policy)
 
 An Eval league is an ordinary ladder that runs a round only when a new policy arrives. It never runs on a timer. The

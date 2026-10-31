@@ -26,6 +26,11 @@ The example is the `game` object's task declaration, not a complete manifest. Us
 uploading; normal image resolution supplies digest-pinned references to the runtime. Resource requests equal limits.
 Instance budgets count every creation, including failed or closed instances. They cannot be renewed during an episode.
 
+For benchmarks with different task images, use
+[`variants[].task_environments`](COWORLD_MANIFEST.md#episode-owned-task-environments) and one
+[population grading league](PLATFORM_LADDER_LEAGUE.md#benchmark-population-leagues) per release. Each task runs in its
+own episode with its own budgets; the manifest guide defines inheritance and certification behavior.
+
 Every request requires `Authorization: Bearer $COWORLD_TASK_TOKEN`. The endpoint is local to the game Pod.
 
 | Operation     | Request                                                                                                                    |

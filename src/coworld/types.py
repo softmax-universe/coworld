@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal, cast, get_args
+from typing import Annotated, Any, Literal, Self, cast, get_args
 
 from packaging.version import Version
 from pydantic import (
@@ -720,6 +721,16 @@ class CoworldVariant(BaseModel):
     name: str = Field(min_length=1, description="Human-readable variant name.")
     game_config: dict[str, Any] = Field(description="Token-free game config that validates against game.config_schema.")
     description: str = Field(min_length=1, description="Human-readable variant description.")
+    task_environments: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")], CoworldTaskEnvironment] | None = (
+        Field(
+            default=None,
+            max_length=2,
+            description=(
+                "Task environments for this variant. Replaces game.task_environments for its episodes; "
+                "null inherits the game definitions, and an empty object disables task environments."
+            ),
+        )
+    )
 
 
 class CoworldCertificationPlayer(BaseModel):
@@ -830,6 +841,27 @@ class CoworldManifest(BaseModel):
     @property
     def episode_timeout_seconds(self) -> int:
         return (self.episode_timeout_minutes or DEFAULT_EPISODE_TIMEOUT_MINUTES) * 60
+
+    def iter_task_environments(self) -> Iterator[CoworldTaskEnvironment]:
+        """Every declared task image, including variants not selected for certification."""
+        yield from self.game.task_environments.values()
+        for variant in self.variants:
+            if variant.task_environments is not None:
+                yield from variant.task_environments.values()
+
+    def for_episode(self, variant_id: str | None) -> Self:
+        """Freeze only the selected task and its environments in an episode snapshot."""
+        if variant_id is None:
+            return self.model_copy(deep=True)
+        variants = {variant.id: variant for variant in self.variants}
+        if variant_id not in variants:
+            raise ValueError(f"unknown Coworld variant_id: {variant_id!r}")
+        variant = variants[variant_id]
+        game = self.game
+        if variant.task_environments is not None:
+            game = game.model_copy(update={"task_environments": variant.task_environments})
+        selected = self.model_copy(update={"game": game, "variants": [variant]})
+        return selected.model_copy(deep=True)
 
     @model_validator(mode="after")
     def validate_role_types(self) -> "CoworldManifest":

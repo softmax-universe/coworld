@@ -35,9 +35,9 @@ generated files, runtime limits, and next steps.
 
 ## Player runtime choice
 
-Authors can choose Observatory-hosted (`platform-hosted`) container players or `game-hosted` file players. Start with
-[Choose a Player Runtime](src/coworld/docs/PLAYER_RUNTIMES.md) for tradeoffs, author responsibilities, privacy, and
-links to both contracts.
+Authors declare `platform-hosted`, `game-hosted`, or both in `game.player_runtime`. Execution follows the episode
+roster. Start with [Choose a Player Runtime](src/coworld/docs/PLAYER_RUNTIMES.md) for tradeoffs, author
+responsibilities, privacy, and links to both contracts.
 
 ## What Is A Coworld?
 
@@ -94,7 +94,8 @@ for checkpoint recovery and selective downloads. These commands require Coworld 
 League lobbies (`coworld lobby create` / `seat` / `claim` / `start`) run mixed human/agent hosted episodes with the same
 LLM sidecar and game/player logs as other Coworld episodes. Casual `hosted-game` sessions do not persist those records.
 Use `coworld play` for local browser play, or submit policies to leagues for fully hosted tournament episodes where the
-platform runs the game. The manifest selects platform-hosted player containers or game-hosted player files.
+platform runs the game. The manifest declares accepted `player_runtime` values: `platform-hosted` and `game-hosted`.
+Execution follows each episode roster.
 
 `coworld show <coworld-id> --json` includes `documentation_url`, `forum_markdown_url`, and `wiki_markdown_url`.
 Community links may return 404 until those resources exist or when your identity cannot see them.

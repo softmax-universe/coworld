@@ -160,6 +160,8 @@ def _runtime_job(player_runtime: str = "platform-hosted", players: list[object] 
         CoworldEpisodeJobSpec,
         SimpleNamespace(
             manifest=SimpleNamespace(game=SimpleNamespace(player_runtime=player_runtime, task_environments={})),
+            player_seats_schema="coworld-player-seats/1" if player_runtime == "game-hosted" else None,
+            has_player_containers=player_runtime != "game-hosted",
             players=players or [],
             episode_tags={},
             results_schema={},
@@ -780,7 +782,7 @@ def test_game_hosted_player_artifact_skips_symlink(monkeypatch, tmp_path, caplog
     monkeypatch.setattr(kubernetes_runner, "upload_file", lambda *_args, **_kwargs: uploads.append(True))
 
     with caplog.at_level(logging.WARNING):
-        oversize_count = kubernetes_runner._upload_player_artifacts(artifacts)
+        oversize_count = kubernetes_runner._upload_player_artifacts(artifacts, slots=frozenset({0}))
 
     assert oversize_count == 0
     assert uploads == []
@@ -807,9 +809,7 @@ def test_game_hosted_failure_uploads_debug_artifacts_but_not_results(monkeypatch
     monkeypatch.setattr(kubernetes_runner, "WORKDIR", artifacts.workspace)
     monkeypatch.setattr(kubernetes_runner, "STATE_PATH", artifacts.workspace / "state.json")
     monkeypatch.setattr(kubernetes_runner, "_start_worker_health_server", lambda _port: None)
-    monkeypatch.setattr(
-        kubernetes_runner, "_read_job_spec", lambda _timings: (_runtime_job("game-hosted", [object()]), b"{}")
-    )
+    monkeypatch.setattr(kubernetes_runner, "_read_job_spec", lambda _timings: (_game_hosted_job([b"player"]), b"{}"))
     monkeypatch.setattr(kubernetes_runner.EpisodeArtifacts, "create", lambda _workdir, prefix: artifacts)
     monkeypatch.setattr(kubernetes_runner, "_run_kubernetes_episode", run_episode)
     monkeypatch.setenv("ERROR_INFO_URI", error_dest.as_uri())

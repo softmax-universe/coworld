@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     field_validator,
     model_serializer,
     model_validator,
@@ -25,6 +26,7 @@ CoworldManifestRole = Literal["player", "commissioner", "grader", "diagnoser", "
 DEFAULT_EPISODE_TIMEOUT_MINUTES = 20
 MAX_EPISODE_TIMEOUT_MINUTES = 1440
 CoworldEngineRuntime = Literal["mettagrid", "cogweb", "bitworld", "nimgrid"]
+CoworldPlayerType = Literal["file", "container", "human"]
 CoworldPlayerRuntime = Literal["platform-hosted", "game-hosted"]
 MANIFEST_ROLE_SECTIONS = cast(tuple[CoworldManifestRole, ...], get_args(CoworldManifestRole))
 _FUTURE_REQUIRED_ROLE_COMMENT = "Optional in the current schema; intended to become required as this role stabilizes."
@@ -210,7 +212,7 @@ class CoworldManifestRoleSpec(CoworldRunnableSpec):
         min_length=1,
         description=(
             "Player file path within the Coworld package, or its sha256 digest after upload. "
-            "Supported only for game-hosted player roles."
+            "Supported when the game accepts file players."
         ),
     )
     id: str = Field(
@@ -306,10 +308,19 @@ class CoworldPlayHumanSeat(BaseModel):
     kind: Literal["human"] = "human"
 
 
+class CoworldPlayContainerSeat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slot: int = Field(ge=0, description="Zero-based episode player slot.")
+    kind: Literal["container"] = "container"
+
+
 # Pure policy rosters keep the shipped player-seats documents; a roster with a
 # human seat is written as ``coworld-play-seats/1``, the document hosted play
 # already stages, so a game that supports play sessions supports it unchanged.
-CoworldPlayerSeatsSchema = Literal["coworld-player-seats/1", "coworld-player-seats/2", "coworld-play-seats/1"]
+CoworldPlayerSeatsSchema = Literal[
+    "coworld-player-seats/1", "coworld-player-seats/2", "coworld-play-seats/1", "coworld-play-seats/2"
+]
 
 
 class CoworldPlayerSeats(BaseModel):
@@ -319,10 +330,18 @@ class CoworldPlayerSeats(BaseModel):
         alias="schema",
         description="Player seats document schema version.",
     )
-    seats: list[CoworldPlayerSeat | CoworldPlayPolicySeat | CoworldPlayHumanSeat] = Field(
-        min_length=1, description="Ordered game-hosted player seats."
+    seats: list[CoworldPlayerSeat | CoworldPlayPolicySeat | CoworldPlayHumanSeat | CoworldPlayContainerSeat] = Field(
+        min_length=1, description="Ordered file, human, or externally executed container seats."
     )
     player_status_uri: str = Field(min_length=1, description="URI where the game writes player process statuses.")
+
+    @model_validator(mode="after")
+    def validate_container_roster(self) -> "CoworldPlayerSeats":
+        if self.schema_ != "coworld-play-seats/2" and any(
+            isinstance(seat, CoworldPlayContainerSeat) for seat in self.seats
+        ):
+            raise ValueError("Container seats require coworld-play-seats/2")
+        return self
 
 
 class CoworldReporterPlatformReference(BaseModel):
@@ -653,10 +672,14 @@ class CoworldGameManifest(BaseModel):
     description: str = Field(min_length=1, description="Human-readable game description surfaced by product UIs.")
     owner: str = Field(min_length=1, description="Maintainer email or handle.")
     memory: CoworldMemory | None = Field(default=None, description="Opt in to platform-managed private policy memory.")
-    player_runtime: CoworldPlayerRuntime = Field(
+    player_runtime: CoworldPlayerRuntime | Annotated[list[CoworldPlayerRuntime], Field(min_length=1)] = Field(
         default="platform-hosted",
-        description="Owner of player execution: the platform or the game process.",
+        description=(
+            "Accepted player runtimes. Platform-hosted players run in containers; game-hosted players execute in the "
+            "game. Declare a list to accept both. Historical string declarations retain their existing meaning."
+        ),
     )
+
     config_schema: JsonSchema = Field(
         description=(
             "JSON Schema for runtime game configs. It must require a string-array `tokens` field for runner-injected "
@@ -701,6 +724,18 @@ class CoworldGameManifest(BaseModel):
             "2: named panels and objective/team semantics. Never required; see docs/artifacts/EVENTS.md."
         ),
     )
+
+    @property
+    def supported_player_types(self) -> frozenset[CoworldPlayerType]:
+        runtimes = [self.player_runtime] if isinstance(self.player_runtime, str) else self.player_runtime
+        types: set[CoworldPlayerType] = set()
+        if "platform-hosted" in runtimes:
+            types.update(("container", "human"))
+        if "game-hosted" in runtimes:
+            types.add("file")
+            if self.runnable.env.get("COGAME_PLAY_SEATS_SCHEMA") == "coworld-play-seats/1":
+                types.add("human")
+        return frozenset(types)
 
     @model_validator(mode="after")
     def validate_version(self) -> "CoworldGameManifest":
@@ -869,13 +904,10 @@ class CoworldManifest(BaseModel):
             for index, runnable in enumerate(getattr(self, section)):
                 if runnable.type != section:
                     raise ValueError(f"{section}.{index}.type must be {section!r}")
-        expected_artifact = "file" if self.game.player_runtime == "game-hosted" else "image"
         for index, player in enumerate(self.player):
-            if getattr(player, expected_artifact) is None:
-                raise ValueError(
-                    f"player.{index} must define {expected_artifact} for "
-                    f"game.player_runtime={self.game.player_runtime!r}"
-                )
+            kind = "file" if player.file is not None else "container"
+            if kind not in self.game.supported_player_types:
+                raise ValueError(f"player.{index} uses unsupported player type {kind!r}")
         return self
 
 
@@ -919,13 +951,37 @@ class CoworldEpisodeJobSpec(BaseModel):
         for index, player in enumerate(self.players):
             if isinstance(player, CoworldRunnableSpec) and player.type != "player":
                 raise ValueError(f"players.{index}.type must be 'player'")
-            if self.manifest.game.player_runtime == "game-hosted" and not isinstance(
-                player, CoworldPlayerFileSpec | CoworldHumanPlayerSpec
-            ):
-                raise ValueError(f"players.{index} must be a player file or human seat for game-hosted player runtime")
-            if self.manifest.game.player_runtime == "platform-hosted" and isinstance(player, CoworldPlayerFileSpec):
-                raise ValueError(f"players.{index} must be an image or human seat for platform-hosted player runtime")
+            kind = (
+                "file"
+                if isinstance(player, CoworldPlayerFileSpec)
+                else "human"
+                if isinstance(player, CoworldHumanPlayerSpec)
+                else "container"
+            )
+            # Historical job payloads accepted human markers before lobby opt-in was checked.
+            if kind == "human" and isinstance(self.manifest.game.player_runtime, str):
+                continue
+            if kind not in self.manifest.game.supported_player_types:
+                raise ValueError(f"players.{index} uses unsupported player type {kind!r}")
         return self
+
+    @property
+    def has_player_containers(self) -> bool:
+        return any(isinstance(player, CoworldRunnableSpec) for player in self.players)
+
+    @property
+    def file_only(self) -> bool:
+        return all(isinstance(player, CoworldPlayerFileSpec) for player in self.players)
+
+    @property
+    def player_seats_schema(self) -> CoworldPlayerSeatsSchema | None:
+        if isinstance(self.manifest.game.player_runtime, list):
+            return "coworld-play-seats/2"
+        if self.manifest.game.player_runtime == "game-hosted":
+            return TypeAdapter(CoworldPlayerSeatsSchema).validate_python(
+                self.game_runnable.env.get("COGAME_PLAYER_SEATS_SCHEMA", "coworld-player-seats/1")
+            )
+        return None
 
     @property
     def game_runnable(self) -> CoworldRunnableSpec:

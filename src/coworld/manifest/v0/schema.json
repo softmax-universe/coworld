@@ -251,11 +251,23 @@
           "description": "Opt in to platform-managed private policy memory."
         },
         "player_runtime": {
+          "anyOf": [
+            {
+              "enum": ["platform-hosted", "game-hosted"],
+              "type": "string"
+            },
+            {
+              "items": {
+                "enum": ["platform-hosted", "game-hosted"],
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ],
           "default": "platform-hosted",
-          "description": "Owner of player execution: the platform or the game process.",
-          "enum": ["platform-hosted", "game-hosted"],
-          "title": "Player Runtime",
-          "type": "string"
+          "description": "Accepted player runtimes. Platform-hosted players run in containers; game-hosted players execute in the game. Declare a list to accept both. Historical string declarations retain their existing meaning.",
+          "title": "Player Runtime"
         },
         "config_schema": {
           "additionalProperties": true,
@@ -463,7 +475,7 @@
             }
           ],
           "default": null,
-          "description": "Player file path within the Coworld package, or its sha256 digest after upload. Supported only for game-hosted player roles.",
+          "description": "Player file path within the Coworld package, or its sha256 digest after upload. Supported when the game accepts file players.",
           "title": "File"
         },
         "id": {

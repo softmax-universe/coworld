@@ -1,0 +1,67 @@
+{
+  "apiVersion": "coworld.softmax.com/v1",
+  "game": {
+    "name": "game-hosted-players",
+    "version": "1.0.0",
+    "description": "File, container and human seats in the same game.",
+    "owner": "coworld@example.com",
+    "player_runtime": ["platform-hosted", "game-hosted"],
+    "config_schema": {},
+    "results_schema": {},
+    "runnable": {
+      "type": "game",
+      "image": "example.com/game-hosted-game:1"
+    },
+    "protocols": {
+      "player": {
+        "type": "text",
+        "value": "Player protocol"
+      },
+      "global": {
+        "type": "text",
+        "value": "Global protocol"
+      }
+    },
+    "docs": {
+      "readme": {
+        "type": "text",
+        "value": "Game-hosted players"
+      }
+    }
+  },
+  "player": [
+    {
+      "type": "player",
+      "file": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": "file-player",
+      "name": "File Player",
+      "description": "Bundled file-backed player."
+    },
+    {
+      "type": "player",
+      "id": "container-player",
+      "name": "Container Player",
+      "description": "WebSocket policy",
+      "image": "example.com/player:1"
+    }
+  ],
+  "variants": [
+    {
+      "id": "default",
+      "name": "Default",
+      "game_config": {},
+      "description": "Default variant."
+    }
+  ],
+  "certification": {
+    "game_config": {},
+    "players": [
+      {
+        "player_id": "file-player"
+      },
+      {
+        "player_id": "container-player"
+      }
+    ]
+  }
+}

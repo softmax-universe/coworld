@@ -9,9 +9,8 @@ kept as a stable entry point for older links; it no longer duplicates the guide.
 
 ## Choose before building
 
-Start with [Choose a Player Runtime](PLAYER_RUNTIMES.md). Observatory-hosted (`platform-hosted`) players use containers
-and WebSockets; `game-hosted` players are files executed by the game. The guide covers tradeoffs, implementation
-obligations, unsupported workflows, and validation for each mode.
+Start with [Choose a Player Runtime](PLAYER_RUNTIMES.md). Declare `game.player_runtime` as `platform-hosted`,
+`game-hosted`, or a list containing both. Execution follows the roster; game authors own file execution and its limits.
 
 ## Exact technical references
 

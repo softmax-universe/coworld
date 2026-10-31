@@ -8,17 +8,19 @@ import threading
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, cast
+from typing import Callable, Mapping
 from urllib.parse import urlencode
 
 from coworld.certifier import (
     CoworldPackage,
     build_manifest_episode_job_spec,
+    episode_player_file_paths,
     load_coworld_package,
     load_manifest_episode_job_spec,
     load_results,
 )
 from coworld.local_images import ensure_downloaded_images
+from coworld.player_files import player_file_bytes
 from coworld.replay_viewer import LocalReplayViewerServer, source_replay_viewer_bundle
 from coworld.runner.runner import (
     CONFIG_ENV_VAR,
@@ -57,6 +59,7 @@ from coworld.runner.runner import (
     replay_client_url,
     replay_session_path,
     resolve_local_extra_ports,
+    stage_player_files,
     write_coworld_game_config,
 )
 from coworld.schema_validation import JsonObject
@@ -109,8 +112,6 @@ def play_coworld(
 ) -> PlayResult:
     package = load_coworld_package(manifest_path, tolerate_newer_fields=True)
     ensure_downloaded_images(package.manifest_path)
-    if package.manifest.game.player_runtime == "game-hosted":
-        raise ValueError("coworld play does not support game-hosted Coworlds")
     artifacts = EpisodeArtifacts.create(workspace, prefix="coworld-play-")
     if episode_request_path is not None and (variant_id is not None or player_images or player_run):
         raise ValueError("episode_request_path cannot be combined with variant_id, player_images, or player_run")
@@ -130,7 +131,19 @@ def play_coworld(
     assert_episode_images_reachable(job_spec)
     tokens = generate_tokens(len(job_spec.players))
     write_coworld_game_config(job_spec, artifacts, tokens)
-    players = [PlayerLaunchSpec.from_model(player) for player in cast(list[CoworldRunnableSpec], job_spec.players)]
+    players = {
+        slot: PlayerLaunchSpec.from_model(player)
+        for slot, player in enumerate(job_spec.players)
+        if isinstance(player, CoworldRunnableSpec)
+    }
+    if job_spec.player_seats_schema is not None:
+        paths = episode_player_file_paths(package, job_spec.players)
+        stage_player_files(
+            job_spec.players,
+            lambda index: player_file_bytes(paths[index]),
+            artifacts,
+            player_seats_schema=job_spec.player_seats_schema,
+        )
     local_ports = resolve_local_extra_ports(package.game.env, allocate_port=_free_local_port)
     game_env = local_game_env(package.game.env, local_ports)
 
@@ -164,6 +177,11 @@ def play_coworld(
                     f"127.0.0.1::{GAME_PORT}",
                     *local_port_publish_args(local_ports),
                     *docker_env_args(game_env),
+                    *(
+                        ["-e", f"COGAME_PLAYER_SEATS_URI=file://{CONTAINER_WORKDIR}/player_seats.json"]
+                        if job_spec.player_seats_schema is not None
+                        else []
+                    ),
                     "-e",
                     f"{GAME_HOST_ENV_VAR}={GAME_HOST}",
                     "-e",
@@ -192,12 +210,12 @@ def play_coworld(
                 package=package,
                 artifacts=artifacts,
                 variant_id=variant_label,
-                links=build_play_links(players, tokens, game_port=game_port),
+                links=build_play_links(list(players), tokens, game_port=game_port),
                 local_ports=local_ports,
             )
             _wait_for_health(game_port, game_process, artifacts.game_stderr_path, timeout_seconds=timeout_seconds)
 
-            for slot, player in enumerate(players):
+            for slot, player in players.items():
                 container_name = f"coworld-play-player-{run_id}-{slot}"
                 engine_ws_url = _player_container_ws_url(game_network_alias, slot, tokens[slot])
                 player_containers.append(container_name)
@@ -234,9 +252,9 @@ def play_coworld(
 
             on_ready(session)
             _wait_for_game_exit(game_process, artifacts.game_stderr_path, timeout_seconds=timeout_seconds)
-            _raise_if_game_declared_player_failure(artifacts, (artifacts.results_path,), player_count=len(players))
+            _raise_if_game_declared_player_failure(artifacts, (artifacts.results_path,), player_count=len(tokens))
 
-            for slot, (player_process, player_log_path) in enumerate(player_processes):
+            for slot, (player_process, player_log_path) in zip(players, player_processes, strict=True):
                 _wait_for_player_exit(
                     player_process,
                     player_log_path,
@@ -368,14 +386,13 @@ def replay_coworld(
 
 
 def build_play_links(
-    players: list[PlayerLaunchSpec],
+    player_slots: list[int],
     tokens: list[str],
     *,
     game_port: int,
 ) -> PlayLinks:
     player_links = [
-        f"http://127.0.0.1:{game_port}/client/player?{_player_query(slot, tokens[slot])}"
-        for slot, _player in enumerate(players)
+        f"http://127.0.0.1:{game_port}/client/player?{_player_query(slot, tokens[slot])}" for slot in player_slots
     ]
     return PlayLinks(
         players=player_links,

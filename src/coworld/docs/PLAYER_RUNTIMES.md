@@ -1,36 +1,72 @@
 # Choose a Player Runtime
 
-Choose `game.player_runtime` before implementing a new Coworld's players. Both modes run hosted episodes on Observatory
-using Kubernetes (`execution_backend=k8s`). This field selects who executes each player, not where the game is hosted.
-“Observatory-hosted players” means `platform-hosted` in the manifest; `observatory-hosted` is not a valid value.
+Declare `game.player_runtime` before implementing a new Coworld's players:
 
-## Compare the two modes
+- `platform-hosted`: platform-managed player containers connected over the game's WebSocket protocol, plus human seats.
+- `game-hosted`: policy files staged before startup and executed by the game.
 
-| Decision                       | `platform-hosted` (default)                                                               | `game-hosted`                                                                                                       |
-| ------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Player artifact                | Docker image (`docker-img` policy)                                                        | File or directory packed as a zip (`player-file` policy)                                                            |
-| Packaging                      | Build a `linux/amd64` player image; 512 MiB bundled image cap; 32 GiB submitted image cap | Prepare a game-defined file or directory; 100 MiB packed cap for bundled and submitted files                        |
-| Startup                        | Pull an image and start a container per seat within the player connection deadline        | Stage and verify seat files before starting the game; game owns player initialization                               |
-| Bundled manifest entry         | `player[].image`                                                                          | `player[].file`                                                                                                     |
-| Execution                      | Runner starts a container per seat; hosted runs use child pods                            | Game loads every seat's file inside its own container                                                               |
-| Player interface               | Game-defined WebSocket protocol at `/player`; runner supplies `COWORLD_PLAYER_WS_URL`     | Game-defined file format, entrypoint, and execution protocol; runner supplies `COGAME_PLAYER_SEATS_URI` to the game |
-| Resources and isolation        | Separate player containers, with platform resource controls                               | Game resources cover all seats; game author owns player isolation, scheduling, and execution limits                 |
-| Policy configuration           | Player `run`, public environment, and policy-scoped secrets                               | No policy process environment or secrets; game defines configuration inside the file format                         |
-| Player code visibility         | Game does not receive player image bytes                                                  | Game author controls code that can read or copy every submitted file                                                |
-| Logs and artifacts             | Runner captures player logs; player uploads its optional zip                              | Game writes separate seat logs and optional zips                                                                    |
-| Human and persistent workflows | Human seats, lobbies, hosted play sessions, and persistent player runtimes                | Episode-only; these workflows are unavailable                                                                       |
+Use `"player_runtime": ["platform-hosted", "game-hosted"]` to accept both, including humans in league lobbies. Each
+bundled player declares exactly one `image` or `file`, and certification uses those fixtures. Submitted artifacts retain
+their own type.
+
+Execution follows the selected episode roster. The runner starts child pods only for container seats. All-file
+experience episodes can use the file worker pool when its existing feature flag and image qualification permit. Human or
+container seats use the regular runner. Conductor remains a separate experimental pilot.
+
+Historical manifests keep their meaning: `player_runtime: platform-hosted` (the default) accepts containers and humans;
+`game-hosted` accepts files and opts into humans with `COGAME_PLAY_SEATS_SCHEMA: coworld-play-seats/1`. New authors
+should use the list form of `player_runtime`.
+
+## Files, containers, and people
+
+Games declaring a runtime list receive `COGAME_PLAYER_SEATS_URI` using
+[`coworld-play-seats/2`](artifacts/PLAYER_SEATS.md#player-type-rosters), even when every seat has the same type. Read
+its explicit slot numbers: a file, container, or human can occupy any slot. Only file entries carry file paths and
+private output destinations. Containers and humans connect to `/player` with their slot token. The game must wait for
+those connections while initializing its file players.
+
+File execution limits, isolation, and private logs remain the game's responsibility. Container resources, secrets,
+warmup, and private diagnostics remain platform-managed. Write file diagnostics to the roster's `player_status_uri`; the
+runner combines file-seat status with its own container observations. Finish file outputs before publishing results.
+
+For local mixed episodes, retain the bundled fixture or replace selected seats explicitly:
+
+```bash
+coworld run-episode ./dist/coworld_manifest.json --player-file 0=./players/my-player.bas
+coworld run-episode ./dist/coworld_manifest.json my-container:latest --player-file 0=./players/my-player.bas
+coworld upload-policy --file ./players/my-player.bas --name my-basic-player
+coworld upload-policy my-container:latest --name my-container-player
+```
+
+The second command fills the other seats with the container image. Use league lobbies for mixed games with human seats.
+
+## Compare file and container players
+
+| Decision                | Container players                                                                         | File players                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Player artifact         | Docker image (`docker-img` policy)                                                        | File or directory packed as a zip (`player-file` policy)                                                            |
+| Packaging               | Build a `linux/amd64` player image; 512 MiB bundled image cap; 32 GiB submitted image cap | Prepare a game-defined file or directory; 100 MiB packed cap for bundled and submitted files                        |
+| Startup                 | Pull an image and start a container per seat within the player connection deadline        | Stage and verify seat files before starting the game; game owns player initialization                               |
+| Bundled manifest entry  | `player[].image`                                                                          | `player[].file`                                                                                                     |
+| Execution               | Runner starts a container per seat; hosted runs use child pods                            | Game loads every seat's file inside its own container                                                               |
+| Player interface        | Game-defined WebSocket protocol at `/player`; runner supplies `COWORLD_PLAYER_WS_URL`     | Game-defined file format, entrypoint, and execution protocol; runner supplies `COGAME_PLAYER_SEATS_URI` to the game |
+| Resources and isolation | Separate player containers, with platform resource controls                               | Game resources cover all seats; game author owns player isolation, scheduling, and execution limits                 |
+| Policy configuration    | Player `run`, public environment, and policy-scoped secrets                               | No policy process environment or secrets; game defines configuration inside the file format                         |
+| Player code visibility  | Game does not receive player image bytes                                                  | Game author controls code that can read or copy every submitted file                                                |
+| Logs and artifacts      | Runner captures player logs; player uploads its optional zip                              | Game writes separate seat logs and optional zips                                                                    |
+| Persistent players      | Platform persistent player runtimes                                                       | Game-managed state within each episode                                                                              |
 
 ## Match the runtime to the game
 
 Choose based on the interface and responsibilities you want to support:
 
-| Requirement                                                                      | Fit                                                                                         |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Submitters bring their own language runtime or dependencies                      | `platform-hosted`: each player packages its environment in an image.                        |
-| Players need policy-scoped secrets, human play, or persistent player runtimes    | `platform-hosted`: these use existing platform workflows.                                   |
-| Submitters should upload player files without building or pushing a player image | `game-hosted`: simpler player packaging, within the game-provided runtime and dependencies. |
-| The game accepts a defined artifact, such as a ruleset, script, or model weights | `game-hosted`: the game supplies the loader and execution environment.                      |
-| Player actions need direct in-game execution instead of a WebSocket exchange     | `game-hosted`: the game controls invocation and scheduling.                                 |
+| Requirement                                                                      | Fit                                                                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Submitters bring their own language runtime or dependencies                      | `container`: each player packages its environment in an image.                       |
+| Players need policy-scoped secrets or persistent player runtimes                 | `container`: these use existing platform workflows.                                  |
+| Submitters should upload player files without building or pushing a player image | `file`: simpler player packaging, within the game-provided runtime and dependencies. |
+| The game accepts a defined artifact, such as a ruleset, script, or model weights | `file`: the game supplies the loader and execution environment.                      |
+| Player actions need direct in-game execution instead of a WebSocket exchange     | `file`: the game controls invocation and scheduling.                                 |
 
 Platform-hosted authors implement the WebSocket protocol and handle container startup, connection deadlines, and
 per-seat resource needs. Game-hosted authors implement file validation and execution budgets, and enforce isolation
@@ -53,7 +89,7 @@ Both modes require a game image. Local episodes require Docker. Hosted platform-
 256Mi memory by default; game-hosted seats share the game's allocation. These are requests, not execution limits. See
 [runtime resource controls](../runner/KUBERNETES_RUNNER_README.md#hosted-resource-baseline).
 
-## Implement platform-hosted players
+## Implement container players
 
 A player is your program, not a platform-defined character or a required reference image. Your program connects to the
 game's documented interface and chooses actions. Game rules and scoring stay in the game. Packaging both entrypoints in
@@ -101,9 +137,9 @@ connecting to the game. The runner starts gameplay after every player with a sta
 increase the game's action or connection budgets. Resource and startup declarations belong to the immutable policy
 version; file players cannot use these pod controls.
 
-## Implement game-hosted players
+## Implement file players
 
-1. Set `game.player_runtime` to `game-hosted`. Give every bundled player exactly one package-relative `file`, and no
+1. Set `game.player_runtime` to `["game-hosted"]`. Give every bundled player exactly one package-relative `file`, and no
    `image`. Only player roles accept files; the game remains an image-backed runnable.
 2. Specify the accepted file format, entrypoint, observation/action interface, dependency availability, and versioning
    in `game.protocols.player` and the game README. Document per-seat time, memory, filesystem, and network boundaries,
@@ -158,9 +194,9 @@ uv run coworld upload-policy --file ./players/a.py --name my-file-player
 
 Repeat a path explicitly to seat the same file twice. A single file override is not broadcast across multiple seats. Do
 not pass an episode-request JSON as a game-hosted positional argument: it is interpreted as player bytes. `run-episode`
-rejects player `--run` and `--secret-env` in this mode. `coworld play` and `coworld scrimmage` are not game-hosted
-validation paths; use headless episodes, certification, and replay inspection. See the [cookbook](COOKBOOK.md) for the
-full workflows, including file upload APIs.
+File policies do not accept container `--run` or `--secret-env` settings. Use episodes, certification, and replay
+inspection to validate file execution. See the [cookbook](COOKBOOK.md) for the full workflows, including file upload
+APIs.
 
 For submitted policies, upload with `--file` rather than an image. File uploads reject `--run`, `--secret-env`,
 `--use-llm`, and `--llm-model`. Submit the returned version through the normal league workflow. The target Coworld must

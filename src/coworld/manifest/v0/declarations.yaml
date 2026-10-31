@@ -60,3 +60,7 @@
   kind: compatible
   summary: Optional per-variant task environments preserve task-specific images and resources in population leagues.
   fixture: packages/coworld/tests/manifest_versions/v0/variant_task_environments_manifest.json
+- schema_hash: 19ee013495d0fef73232c00056995696177276879f214bf4a812d481d08ebdb7
+  kind: compatible
+  summary: Allow lists of platform-hosted and game-hosted runtimes; preserve single-runtime declarations and roster-based execution.
+  fixture: packages/coworld/tests/manifest_versions/v0/player_runtimes_manifest.json

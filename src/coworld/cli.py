@@ -30,9 +30,9 @@ from coworld.certification_report import write_certification_report
 from coworld.certifier import (
     _certification_failure_feedback,
     build_manifest_episode_job_spec,
-    certification_player_file_paths,
     certify_coworld,
     compute_log_richness,
+    episode_player_file_paths,
     load_coworld_package,
     load_executable_transcript,
     load_manifest_episode_job_spec,
@@ -1793,6 +1793,12 @@ def run_episode(
             )
         ),
     ] = None,
+    player_file: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--player-file", help="Replace a zero-based seat with a local file: SLOT=PATH. Repeat for mixed rosters."
+        ),
+    ] = None,
     run: Annotated[
         list[str] | None,
         typer.Option("--run", help="Command argv for supplied player image(s)."),
@@ -1846,6 +1852,12 @@ def run_episode(
     ] = None,
 ) -> None:
     validate_run_argv(run)
+    file_overrides: dict[int, Path] = {}
+    for entry in player_file or []:
+        slot, separator, path = entry.partition("=")
+        if not separator or not slot.isdecimal() or not path or int(slot) in file_overrides:
+            raise typer.BadParameter("--player-file requires a unique nonnegative SLOT=PATH")
+        file_overrides[int(slot)] = Path(path)
     parsed_secret_env: dict[str, str] = {}
     if secret_env:
         for kv in secret_env:
@@ -1856,7 +1868,8 @@ def run_episode(
     with _materialized_manifest_path(manifest_uri, server=server) as manifest_path:
         package = load_coworld_package(manifest_path, tolerate_newer_fields=True)
         ensure_downloaded_images(package.manifest_path)
-        if package.manifest.game.player_runtime == "game-hosted":
+        legacy_file_args = package.manifest.game.player_runtime == "game-hosted"
+        if legacy_file_args:
             if run or use_llm or secret_env:
                 raise typer.BadParameter("game-hosted Coworlds do not support --run, --use-llm, or --secret-env")
             episode_request_path = None
@@ -1869,38 +1882,28 @@ def run_episode(
             )
             if episode_request_path is not None and (variant_id is not None or run):
                 raise typer.BadParameter("episode request files cannot be combined with --variant or --run")
-        game_hosted = package.manifest.game.player_runtime == "game-hosted"
         override_paths = (
             [Path(value) for value in episode_request_or_player_images]
-            if game_hosted and episode_request_or_player_images
+            if legacy_file_args and episode_request_or_player_images
             else None
         )
         if episode_request_path is None:
-            try:
-                spec = build_manifest_episode_job_spec(
-                    package,
-                    variant_id=variant_id,
-                    player_images=player_images,
-                    player_run=run,
-                    player_files=override_paths,
-                )
-            except ValueError as exc:
-                if "player file paths" not in str(exc):
-                    raise
-                raise typer.BadParameter(str(exc)) from exc
+            spec = build_manifest_episode_job_spec(
+                package,
+                variant_id=variant_id,
+                player_images=player_images,
+                player_run=run,
+                player_files=override_paths,
+                player_files_by_slot=file_overrides,
+            )
         else:
+            if file_overrides:
+                raise typer.BadParameter("episode request files cannot be combined with --player-file")
             spec = load_manifest_episode_job_spec(package, episode_request_path)
-        if game_hosted:
-            if override_paths is not None:
-                player_file_paths = override_paths
-            else:
-                try:
-                    player_file_paths = certification_player_file_paths(package, len(spec.players))
-                except ValueError as exc:
-                    raise typer.BadParameter(
-                        "this manifest references its player files by digest; run `coworld download` to "
-                        "materialize them, or pass one player file path per seat"
-                    ) from exc
+        if spec.player_seats_schema is not None:
+            player_file_paths = episode_player_file_paths(
+                package, spec.players, [*(override_paths or []), *file_overrides.values()]
+            )
         parsed_manifest_uri = urlparse(manifest_uri)
         if output_dir is not None:
             artifacts_dir = output_dir
@@ -1931,8 +1934,8 @@ def run_episode(
             timeout_seconds=timeout_seconds,
             verify_replay=verify_replay,
             container_prefix="coworld-run",
-            **({"secret_env": parsed_secret_env} if parsed_secret_env else {}),
-            **({"player_file_paths": player_file_paths} if player_file_paths is not None else {}),
+            secret_env=parsed_secret_env,
+            player_file_paths=player_file_paths,
         )
         typer.echo(f"Artifacts: {artifacts.workspace}")
         typer.echo(f"Results: {artifacts.results_path}")

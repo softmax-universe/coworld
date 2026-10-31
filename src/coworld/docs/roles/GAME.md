@@ -24,12 +24,14 @@ rules, strategy, setup, and context. Additional `game.docs.pages` entries are op
 Game-authored pages should stay game-specific; Softmax `play_*.md` pages, when present, own platform setup, upload, and
 league-submission steps.
 
-`game.player_runtime` selects who executes players:
+Declare accepted runtimes in `game.player_runtime`, using `platform-hosted`, `game-hosted`, or a list containing both:
 
-- `platform-hosted` is the default. Each player is an image-backed runnable in its own local container or hosted child
-  pod.
-- `game-hosted` gives the game one verified file per seat. The game reads, executes, and observes those files inside its
-  own container. No player containers or child pods exist.
+- `game-hosted`: the game executes verified policy files and owns isolation, budgets, and private outputs.
+- `platform-hosted`: the platform starts player containers connected over WebSocket; people can join through league
+  lobbies.
+
+These types can share one roster. Read [player types](../PLAYER_RUNTIMES.md#files-containers-and-people) for startup and
+output ownership. Historical `player_runtime` declarations retain their existing interpretation.
 
 ## Contract
 

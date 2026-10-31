@@ -129,7 +129,7 @@ from coworld.runner.runner import (
     _player_query as _episode_player_query,
 )
 from coworld.runner.self_hosted_inference import requested_self_hosted_models, wait_for_self_hosted_models
-from coworld.types import CoworldEpisodeJobSpec, CoworldRunnableSpec
+from coworld.types import CoworldEpisodeJobSpec, CoworldHumanPlayerSpec, CoworldPlayerFileSpec, CoworldRunnableSpec
 
 _IMPORT_DONE_NS = time.monotonic_ns()
 
@@ -565,6 +565,9 @@ def run_from_env(*, prepare_players: bool = False) -> None:
         # writes missing-log placeholders, so a second pass would report clean diagnostics.
         outputs_prepared = False
         verdict_published = False
+        file_slots = frozenset(
+            slot for slot, player in enumerate(job.players) if isinstance(player, CoworldPlayerFileSpec)
+        )
 
         def publish_verdict(exc: Exception) -> None:
             # The first published failure is the episode's verdict. A later teardown error,
@@ -598,14 +601,14 @@ def run_from_env(*, prepare_players: bool = False) -> None:
             # regular file, an upload error) must reach the backend as a typed runner error,
             # not as an unexplained crash after results may already be visible.
             upload_start = time.monotonic_ns()
-            if job.manifest.game.player_runtime == "game-hosted":
+            if job.player_seats_schema is not None:
                 _prepare_game_hosted_outputs(job, artifacts, timings)
                 outputs_prepared = True
             _upload_outputs(artifacts)
         except Exception as exc:
             if not verdict_published:
                 publish_verdict(exc)
-            if job.manifest.game.player_runtime == "game-hosted" and not outputs_prepared:
+            if job.player_seats_schema is not None and not outputs_prepared:
                 try:
                     _prepare_game_hosted_outputs(job, artifacts, timings)
                 except Exception as cleanup_exc:
@@ -617,9 +620,9 @@ def run_from_env(*, prepare_players: bool = False) -> None:
                 _upload_debug_logs(artifacts)
             except Exception as cleanup_exc:
                 logger.warning("Failed to upload debug logs after episode failure: %s", exception_summary(cleanup_exc))
-            if job.manifest.game.player_runtime == "game-hosted":
+            if job.player_seats_schema is not None:
                 try:
-                    timings.player_artifact_oversize_count = _upload_player_artifacts(artifacts)
+                    timings.player_artifact_oversize_count = _upload_player_artifacts(artifacts, slots=file_slots)
                 except Exception as cleanup_exc:
                     logger.warning(
                         "Failed to upload player artifacts after episode failure: %s",
@@ -631,8 +634,8 @@ def run_from_env(*, prepare_players: bool = False) -> None:
             except Exception as cleanup_exc:
                 logger.warning("Failed to upload timings after episode failure: %s", exception_summary(cleanup_exc))
             raise
-        if job.manifest.game.player_runtime == "game-hosted":
-            timings.player_artifact_oversize_count = _upload_player_artifacts(artifacts)
+        if job.player_seats_schema is not None:
+            timings.player_artifact_oversize_count = _upload_player_artifacts(artifacts, slots=file_slots)
         timings.artifact_upload_s = worker_timings.record("artifact_upload", upload_start)
         logger.info("Required episode outputs durable")
         worker_timings.final_clock = TimingClock.capture()
@@ -768,25 +771,50 @@ def _prepare_game_hosted_outputs(
     if "COWORLD_POOL_ASSIGNMENT" in os.environ:
         require_clean_pool_outputs(artifacts.workspace)
     timings.player_status_invalid_count = 0
-    player_status = _read_game_authored_file(artifacts.player_status_path, _PLAYER_STATUS_MAX_BYTES)
+    status_path = (
+        artifacts.workspace / "game_player_status.json"
+        if job.player_seats_schema == "coworld-play-seats/2"
+        else artifacts.player_status_path
+    )
+    player_status = _read_game_authored_file(status_path, _PLAYER_STATUS_MAX_BYTES)
     if player_status is not None:
         if len(player_status) > _PLAYER_STATUS_MAX_BYTES:
             logger.warning(
                 "Discarding invalid game-hosted player status: file exceeds the %d-byte limit",
                 _PLAYER_STATUS_MAX_BYTES,
             )
-            artifacts.player_status_path.unlink()
+            status_path.unlink()
             timings.player_status_invalid_count = 1
         else:
             try:
-                PlayerRuntimeStatuses.model_validate_json(player_status)
+                game_statuses = PlayerRuntimeStatuses.model_validate_json(player_status)
+                if job.player_seats_schema == "coworld-play-seats/2":
+                    file_slots = {
+                        slot for slot, player in enumerate(job.players) if isinstance(player, CoworldPlayerFileSpec)
+                    }
+                    container_statuses = (
+                        PlayerRuntimeStatuses.model_validate_json(artifacts.player_status_path.read_bytes()).players
+                        if artifacts.player_status_path.is_file()
+                        else []
+                    )
+                    artifacts.player_status_path.write_text(
+                        PlayerRuntimeStatuses(
+                            players=[
+                                *container_statuses,
+                                *(status for status in game_statuses.players if status.slot in file_slots),
+                            ]
+                        ).model_dump_json(),
+                        encoding="utf-8",
+                    )
             except ValidationError as exc:
                 logger.warning("Discarding invalid game-hosted player status: %s", exc)
-                artifacts.player_status_path.unlink()
+                status_path.unlink()
                 timings.player_status_invalid_count = 1
 
     missing_count = 0
-    for slot in range(len(job.players)):
+    for slot, player in enumerate(job.players):
+        if not isinstance(player, CoworldPlayerFileSpec):
+            continue
         log_path = artifacts.policy_log_path(slot)
         if not log_path.exists():
             log_path.write_text(GAME_HOSTED_PLAYER_LOG_MISSING, encoding="utf-8")
@@ -809,13 +837,15 @@ def _prepare_game_hosted_outputs(
             artifacts.policy_log_messages[artifacts.policy_log_path(slot).name] = f"[Annotations rejected: {error}.]\n"
 
 
-def _upload_player_artifacts(artifacts: EpisodeArtifacts) -> int:
+def _upload_player_artifacts(artifacts: EpisodeArtifacts, *, slots: frozenset[int]) -> int:
     oversize_count = 0
     for targets_env, path_for_slot, max_bytes, media_type in (
         ("PLAYER_ARTIFACT_UPLOAD_URLS", artifacts.policy_artifact_path, _PLAYER_ARTIFACT_MAX_BYTES, "application/zip"),
         (ANNOTATIONS_TARGETS_ENV, artifacts.policy_annotations_path, ANNOTATIONS_MAX_BYTES, ANNOTATIONS_MEDIA_TYPE),
     ):
         for slot, uri in TypeAdapter(dict[int, str]).validate_json(os.environ.get(targets_env, "{}")).items():
+            if slot not in slots:
+                continue
             artifact_path = path_for_slot(slot)
             artifact = _open_game_authored_file(artifact_path)
             if artifact is None:
@@ -1095,7 +1125,8 @@ def _run_kubernetes_episode(
     worker_timings = timings.worker
     egress_enforcement_enabled = os.environ.get("COWORLD_EGRESS_ENFORCEMENT_ENABLED") == "true"
     if "COWORLD_POOL_ASSIGNMENT" in os.environ:
-        _run_game_hosted_episode(
+        assert job.file_only, "Episode pool requires an all-file roster"
+        _run_episode_without_player_pods(
             job,
             artifacts,
             core_v1=None,
@@ -1112,8 +1143,8 @@ def _run_kubernetes_episode(
     namespace = os.environ["JOB_NAMESPACE"]
     pod_name = os.environ["POD_NAME"]
     tokens = json.loads(STATE_PATH.read_text(encoding="utf-8"))["tokens"]
-    if job.manifest.game.player_runtime == "game-hosted":
-        _run_game_hosted_episode(
+    if not job.has_player_containers:
+        _run_episode_without_player_pods(
             job,
             artifacts,
             core_v1=core_v1,
@@ -1132,7 +1163,7 @@ def _run_kubernetes_episode(
         for slot, player in enumerate(job.players)
         if isinstance(player, CoworldRunnableSpec)
     ]
-    is_lobby = len(policy_players) != len(job.players)
+    is_lobby = any(isinstance(player, CoworldHumanPlayerSpec) for player in job.players)
     startup_timeout_seconds = (
         LOBBY_RUNTIME_STARTUP_TIMEOUT_SECONDS if is_lobby else DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS
     )
@@ -1156,9 +1187,9 @@ def _run_kubernetes_episode(
         worker_timings.record("health_wait", health_start, game_ready)
         timings.game_boot_s = (game_ready - worker_start) / 1_000_000_000
         upload_timings(timings)
-        if job.players:
-            _require_http_ok(_player_client_url(0, tokens[0]))
-            asyncio.run(_require_bad_player_rejected(f"ws://127.0.0.1:{GAME_PORT}/player?slot=0&token=bad"))
+        first_slot = policy_players[0][0]
+        _require_http_ok(_player_client_url(first_slot, tokens[first_slot]))
+        asyncio.run(_require_bad_player_rejected(f"ws://127.0.0.1:{GAME_PORT}/player?slot={first_slot}&token=bad"))
         _require_http_ok(f"http://127.0.0.1:{GAME_PORT}/client/global")
 
         launch_timings = ProcessTimings.model_validate_json(
@@ -1290,7 +1321,7 @@ def _run_kubernetes_episode(
                 raise episode_failure
 
 
-def _run_game_hosted_episode(
+def _run_episode_without_player_pods(
     job: CoworldEpisodeJobSpec,
     artifacts: EpisodeArtifacts,
     *,
@@ -1331,7 +1362,9 @@ def _run_game_hosted_episode(
             _require_global_message(
                 f"ws://127.0.0.1:{GAME_PORT}/global",
                 timeout_seconds=timeout_seconds,
-                startup_timeout_seconds=DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
+                startup_timeout_seconds=LOBBY_RUNTIME_STARTUP_TIMEOUT_SECONDS
+                if human_game_service
+                else DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
                 require_pong=job.episode_tags.get("source") == CERTIFICATION_EPISODE_SOURCE,
             )
         )

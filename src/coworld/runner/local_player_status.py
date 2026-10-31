@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -44,14 +46,22 @@ class LocalPlayerReceipts(BaseModel):
     players: list[LocalPlayerReceipt]
 
 
-def collect_local_player_status(containers: list[str], player_count: int, workspace: Path) -> None:
+def collect_local_player_status(containers: Mapping[int, str], player_count: int, workspace: Path) -> None:
     """Keep unknown/missing seats explicit; never attribute cleanup SIGKILL to a player."""
     statuses = [
         PlayerRuntimeStatus(slot=slot, state="not_started", reason="container_not_created")
         for slot in range(player_count)
     ]
+    status_path = workspace / "game_player_status.json"
+    if status_path.is_file():
+        descriptor = os.open(status_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            game_statuses = PlayerRuntimeStatuses.model_validate_json(source.read(1024 * 1024)).players
+        for status in game_statuses:
+            if 0 <= status.slot < player_count and status.slot not in containers:
+                statuses[status.slot] = status
     receipts = []
-    for slot, name in enumerate(containers):
+    for slot, name in containers.items():
         result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True, timeout=10)
         if result.returncode:
             statuses[slot] = PlayerRuntimeStatus(slot=slot, state="unavailable", reason="docker_inspect_failed")
@@ -80,6 +90,10 @@ def collect_local_player_status(containers: list[str], player_count: int, worksp
         ("player_status.json", PlayerRuntimeStatuses(players=statuses).model_dump_json(indent=2)),
         ("player_containers.json", LocalPlayerReceipts(players=receipts).model_dump_json(indent=2)),
     ]:
-        fd = os.open(workspace / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as output:
+        with tempfile.NamedTemporaryFile(mode="w", dir=workspace, delete=False) as output:
             output.write(payload)
+            temporary = Path(output.name)
+        try:
+            temporary.replace(workspace / name)
+        finally:
+            temporary.unlink(missing_ok=True)

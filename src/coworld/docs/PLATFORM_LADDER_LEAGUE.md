@@ -277,8 +277,9 @@ Keep certification's task configuration and environment in the game defaults.
 This uses the ordinary Coworld variant model and existing continuous-grading planner. For comparison,
 [Sugarscape](https://github.com/Metta-AI/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
 declares five variants; its Solo/Duos modes sample an 80-scenario pool inside the selected variant's game configuration.
-A benchmark population instead declares each task as a variant and grades every variant. Each task runs in a separate
-episode; the Coworld release and league group those episodes, and ordinary admission controls their concurrency.
+A benchmark declares tasks and evaluation conditions as variants within one Coworld. Each league selects an explicit
+population from the pinned release. Each selected variant runs in a separate episode; ordinary admission controls
+concurrency. Different leagues can select different protocols or populations from the same Coworld.
 
 Create one league after promoting that release to canonical. Enable its game-version lock through
 `POST /v2/leagues/{league_id}/locks` with `{"game_version_locked": true, "submissions_locked": false}`. This pins the
@@ -296,7 +297,7 @@ current canonical Coworld. Then configure its ladder:
   "continuous": {
     "enabled": true,
     "scope": "entries",
-    "all_variants": true,
+    "variant_ids": ["task-a", "task-b"],
     "seats_per_episode": 1,
     "max_policies_per_round": 1,
     "regrade_interval_minutes": null
@@ -305,7 +306,9 @@ current canonical Coworld. Then configure its ladder:
 }
 ```
 
-One submission plans one episode per task and receives their mean score. Use comparable per-task scores, such as binary
+One submission plans one episode per selected variant and receives their mean score. Unselected variants do not run or
+affect the grade. Adding variants to another release does not expand this frozen population. Selected IDs must be
+unique, exist in the locked release, and accept the configured roster. Use comparable per-task scores, such as binary
 solve rates; benchmarks with weighted or question-level scoring need their native aggregation instead. The benchmark
 standings publish a grade only after every task completes successfully, exactly once. A partial or failed population is
 not a complete benchmark score. Episode and round episode responses expose `variant_id` for task-level inspection

@@ -64,3 +64,7 @@
   kind: compatible
   summary: Allow lists of platform-hosted and game-hosted runtimes; preserve single-runtime declarations and roster-based execution.
   fixture: packages/coworld/tests/manifest_versions/v1/player_runtimes_manifest.json
+- schema_hash: b853e4cf895cabf763b589a0a7dcebdf580054c3724e895a468ac884dc488794
+  kind: compatible
+  summary: Optional per-variant game runnables preserve evaluator images, commands and resources.
+  fixture: packages/coworld/tests/manifest_versions/v1/variant_game_runnable_manifest.json

@@ -1959,6 +1959,8 @@ def _manifest_image_fields(value: dict[str, Any]) -> list[dict[str, Any]]:
     if "task_environments" in game:
         fields.extend(game["task_environments"].values())
     for variant in value["variants"]:
+        if "game_runnable" in variant and variant["game_runnable"] is not None:
+            fields.append(variant["game_runnable"])
         if "task_environments" in variant and variant["task_environments"] is not None:
             fields.extend(variant["task_environments"].values())
     for section in MANIFEST_ROLE_SECTIONS:

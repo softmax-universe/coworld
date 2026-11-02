@@ -1109,6 +1109,18 @@
           "title": "Description",
           "type": "string"
         },
+        "game_runnable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoworldRunnableSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Game implementation for this variant, sharing the Coworld config, results and player contracts."
+        },
         "task_environments": {
           "anyOf": [
             {

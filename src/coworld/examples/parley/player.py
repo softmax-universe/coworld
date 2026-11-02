@@ -118,7 +118,7 @@ class PrivateAttempt(Packet):
     behavior_logprobs: list[float] | None = None
 
 
-class UnitSamplingEvidence(Packet):
+class SamplingDetails(Packet):
     policy_revision: str
     tokenizer_revision: str
     chat_template: str
@@ -132,10 +132,13 @@ class UnitSamplingEvidence(Packet):
     behavior_log_probs: list[float]
     stop_reason: Literal["eos", "length"]
     response: str
+
+
+class UnitSamplingEvidence(SamplingDetails):
     sampling: Literal["full_softmax_temperature_one"]
 
 
-class TemperedSamplingEvidence(UnitSamplingEvidence):
+class TemperedSamplingEvidence(SamplingDetails):
     sampling: Literal["full_softmax"]
     temperature: FiniteFloat = Field(gt=0, le=2)
 
@@ -252,6 +255,10 @@ class Player:
         }
         if "PARLEY_API_KEY_ENV" in os.environ:
             headers["Authorization"] = "Bearer " + os.environ[os.environ["PARLEY_API_KEY_ENV"]]
+        if "COWORLD_XP_BATCH_KEY" in os.environ:
+            headers["Authorization"] = "Bearer " + os.environ["COWORLD_XP_BATCH_KEY"]
+            headers["X-Parley-Game"] = os.environ["COWORLD_XP_BATCH_GAME_ID"]
+            headers["X-Parley-Decision"] = decision_id
         body = bytearray()
         sent_action = False
         try:

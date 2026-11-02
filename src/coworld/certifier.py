@@ -944,6 +944,11 @@ def _assert_transcript_complete(transcript: CoworldTranscript, step_results: lis
 def _image_references(package: CoworldPackage) -> list[tuple[str, str]]:
     references = [("game.runnable.image", package.game.image)]
     references.extend(
+        (f"variants[{variant.id}].game_runnable.image", variant.game_runnable.image)
+        for variant in package.manifest.variants
+        if variant.game_runnable is not None
+    )
+    references.extend(
         (f"Certification players[{slot}].image", player.image)
         for slot, player in enumerate(_certification_player_selection(package))
         if player.image is not None
@@ -959,6 +964,11 @@ def _image_references(package: CoworldPackage) -> list[tuple[str, str]]:
 
 def _source_references(package: CoworldPackage) -> list[tuple[str, str | None]]:
     references = [("game.runnable", package.manifest.game.runnable.source_url)]
+    references.extend(
+        (f"variants[{variant.id}].game_runnable", variant.game_runnable.source_url)
+        for variant in package.manifest.variants
+        if variant.game_runnable is not None
+    )
     for section in ("player", "commissioner", "grader", "diagnoser", "optimizer"):
         references.extend(
             (f"{section}[{index}]", runnable.source_url)

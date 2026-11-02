@@ -50,7 +50,7 @@ pyproject_test(
         "no-sandbox",
         "requires-network",
     ],
-    long_timeout = ["test_child_lifetime_system", "test_task_environment_system"],
+    long_timeout = ["test_child_lifetime_system", "test_task_environment_system", "system_test_parley_batch_system"],
     per_test = {
         "test_coworld_kubernetes_runner": {"data": [":manifest_version_fixtures"]},
         "test_manifest_versions": {"data": [":manifest_version_fixtures"]},

@@ -215,6 +215,16 @@ container or a human at a seat:
 - `coworld certify` and `coworld run-episode` image or `--run` overrides for players;
 - baseline image analysis for file-backed bundled players.
 
+## Variant game implementations
+
+`variants[].game_runnable` selects a different game image, command, environment and resource declaration for that
+variant. It shares the Coworld's config schema, results schema and player contract. Omission uses `game.runnable`.
+Selection happens before image resolution and admission; episode snapshots retain the selected implementation.
+Certification uses the default game runnable. Qualify each implementation and its selected population separately.
+
+Use this when one benchmark contains frozen evaluators with different dependencies or catalogs. Each episode starts one
+selected implementation; grouping a benchmark does not start every evaluator image together.
+
 ## Episode-owned task environments
 
 `game.task_environments` declares execution environments that the game controls during hosted episodes. Each task runs

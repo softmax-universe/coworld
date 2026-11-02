@@ -43,6 +43,7 @@ from coworld.manifest.registry import read_downloaded_manifest
 from coworld.manifest_validation import validate_coworld_manifest_game_configs
 from coworld.player_files import player_file_bytes, resolve_player_file
 from coworld.replay_viewer import source_replay_viewer_bundle
+from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
 from coworld.types import MANIFEST_ROLE_SECTIONS, CoworldPlayerStartup, CoworldRunnableResources
 from softmax.docs import DOCS_AGENT_INDEX_URL, DOCS_AGENT_SKILL_URL
@@ -924,6 +925,7 @@ class CoworldUploadClient(CoworldHttpClient):
         tags: dict[str, str] | None = None,
         resources: CoworldRunnableResources | None = None,
         startup: CoworldPlayerStartup | None = None,
+        shared_inference: SharedInferenceModel | None = None,
     ) -> PolicyVersionResponse:
         policy_secret_env_id: str | None = None
         if secret_env:
@@ -947,6 +949,8 @@ class CoworldUploadClient(CoworldHttpClient):
             payload["resources"] = resources.model_dump(mode="json", exclude_none=True)
         if startup is not None:
             payload["startup"] = startup.model_dump(mode="json")
+        if shared_inference is not None:
+            payload["shared_inference"] = shared_inference.model_dump(mode="json")
         if tags:
             payload["tags"] = tags
         return self._post(
@@ -1678,6 +1682,7 @@ def upload_policy_cmd(
     run: list[str] | None = None,
     resources: CoworldRunnableResources | None = None,
     startup: CoworldPlayerStartup | None = None,
+    shared_inference: SharedInferenceModel | None = None,
     secret_env: dict[str, str] | None = None,
     tags: dict[str, str] | None = None,
     server: str = DEFAULT_SUBMIT_SERVER,
@@ -1686,7 +1691,7 @@ def upload_policy_cmd(
         raise ValueError("Exactly one of image or player_file is required")
     with CoworldUploadClient.from_login(server_url=server) as client:
         if player_file is not None:
-            if run or secret_env or resources is not None or startup is not None:
+            if run or secret_env or resources is not None or startup is not None or shared_inference is not None:
                 raise ValueError(
                     "player-file policies do not support run commands, secret environments, or pod resources"
                 )
@@ -1721,6 +1726,7 @@ def upload_policy_cmd(
                 run=run,
                 resources=resources,
                 startup=startup,
+                shared_inference=shared_inference,
                 secret_env=secret_env,
                 tags=tags,
             )
@@ -1953,6 +1959,8 @@ def _manifest_image_fields(value: dict[str, Any]) -> list[dict[str, Any]]:
     if "task_environments" in game:
         fields.extend(game["task_environments"].values())
     for variant in value["variants"]:
+        if "game_runnable" in variant and variant["game_runnable"] is not None:
+            fields.append(variant["game_runnable"])
         if "task_environments" in variant and variant["task_environments"] is not None:
             fields.extend(variant["task_environments"].values())
     for section in MANIFEST_ROLE_SECTIONS:

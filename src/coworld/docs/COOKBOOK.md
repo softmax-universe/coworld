@@ -956,6 +956,40 @@ fixed `policy_ref` entries pinned in seat order, so new policy versions can reta
 policy version as the state key. Children start `pending` and are dispatched asynchronously, so a `get` right after
 `create` shows them as `pending`.
 
+### Shared GPU inference for a fixed roster
+
+Compatible Parley checkpoint policies share loaded models across XP requests and users. Pin every seat with an explicit
+`policy_ref` and slot number. For eight full matches, add
+`"gpu_batch": {"concurrency": 8, "timeout_seconds": 7200, "full_matches": true}` and `"num_episodes": 8`. Concurrency
+defaults to four. The wire format accepts 1–100; deployment limits default to 16 live games per model and 32 per user.
+Larger cohorts receive HTTP 422. All episodes must fit in that static cohort, without replacement games. Size the cohort
+against measured decision latency. A four-A10G Parley proof completed 32/32 full matches at 63.75 matches/hour; 100
+concurrent games exceeded action deadlines on the worker serving a policy repeated in two seats.
+
+The Parley release must advertise `PARLEY_BATCH_PROTOCOL=parley.xp.v1`. Each game starts after its own players register.
+The coordinator authorizes each game's next decision immediately, without a cross-game startup or turn barrier. SGLang
+batches concurrent requests inside each model worker. Each game retains its seed, sampled rules, accepted actions,
+results, replay and private captures. Other CPU/HTTPS players retain their ordinary endpoints and credentials.
+
+GPU policies need the compatible native inference adapter and canonical Parley client. Upload them with
+`--gpu --startup-port 8080 --shared-inference-model qwen4-<checkpoint SHA256>`. Shared versions cannot carry secret
+environments or use the native LLM sidecar. This initial adapter supports nonthinking inference. Each distinct GPU
+policy version reuses a worker across matching requests, including repeated seats. Requests with different immutable
+serving settings use different workers. Whole-cohort admission queues requests when model or user limits are exhausted.
+Finished games free slots after native work stops and the gateway acknowledges removal. Cancelling one request preserves
+peers. Idle workers stop after five minutes. Dispatcher recovery preserves worker identities and reservations.
+
+The platform must approve each canonical serving image digest before sharing it across users. A policy's upload
+declaration alone is insufficient. Unapproved batch requests return HTTP 422 before creation; ordinary XP remains
+available for custom containers. The deployment's approved-image list defaults to empty.
+
+`full_matches: true` attempts every sampled round without the ordinary round-cost cutoff. The request's remaining
+lifetime is a hard limit, with ten seconds reserved for cleanup. Expiration produces incomplete evidence without scores.
+Without this option, the ordinary play budget remains in effect. Per-decision limits are unchanged in both modes. The
+batch timeout includes model startup and permits 60–21,600 seconds. Failed games are terminal; peers can finish. A lost
+shared worker fails its attached requests and requires new requests. CPU clients still pull the original policy image's
+model layers. Measure full matches and accepted decisions per GPU-hour.
+
 ### Non-CLI API
 
 ```python

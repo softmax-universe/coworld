@@ -55,6 +55,11 @@ def build_coworld_manifest(
     }
     game["version"] = version
     runnables: list[dict[str, Any]] = [game["runnable"]]
+    runnables.extend(
+        variant["game_runnable"]
+        for variant in manifest_json["variants"]
+        if "game_runnable" in variant and variant["game_runnable"] is not None
+    )
     for section in ROLE_SECTIONS:
         if section in manifest_json:
             runnables.extend(manifest_json[section])
@@ -229,7 +234,17 @@ def _with_pinned_source_urls(manifest: CoworldManifest, source_contexts: Mapping
     game = manifest.game.model_copy(
         update={"runnable": _with_pinned_runnable_source_url(manifest.game.runnable, source_contexts)}
     )
-    updates: dict[str, object] = {"game": game}
+    updates: dict[str, object] = {
+        "game": game,
+        "variants": [
+            variant.model_copy(
+                update={"game_runnable": _with_pinned_runnable_source_url(variant.game_runnable, source_contexts)}
+            )
+            if variant.game_runnable is not None
+            else variant
+            for variant in manifest.variants
+        ],
+    }
     for section in ROLE_SECTIONS:
         updates[section] = [
             _with_pinned_runnable_source_url(runnable, source_contexts) for runnable in getattr(manifest, section)
@@ -306,7 +321,10 @@ def resolve_registry_image_ref(image: str) -> str:
 
 
 def _manifest_images(manifest: CoworldManifest) -> tuple[str, ...]:
-    images = [manifest.game.runnable.image, *(task.image for task in manifest.iter_task_environments())]
+    images = [
+        *(runnable.image for runnable in manifest.iter_game_runnables()),
+        *(task.image for task in manifest.iter_task_environments()),
+    ]
     for section in ROLE_SECTIONS:
         images.extend(runnable.image for runnable in getattr(manifest, section) if runnable.image is not None)
     return tuple(dict.fromkeys(images))
@@ -326,6 +344,15 @@ def _with_image_tags(manifest: CoworldManifest, image_tags: dict[str, str]) -> C
     )
     variants = []
     for variant in manifest.variants:
+        if variant.game_runnable is not None:
+            runnable = variant.game_runnable
+            variant = variant.model_copy(
+                update={
+                    "game_runnable": runnable.model_copy(
+                        update={"image": image_tags.get(runnable.image, runnable.image)}
+                    )
+                }
+            )
         if variant.task_environments is not None:
             task_environments = {
                 name: task.model_copy(update={"image": image_tags.get(task.image, task.image)})

@@ -81,11 +81,11 @@ class InferenceSettings(BaseModel):
         if self.thinking_budget is not None:
             request["custom_params"] = {"thinking_budget": self.thinking_budget}
         if self.stop:
-            request["stop"] = self.stop
+            request["stop"] = list(self.stop)
         if self.seed is not None:
             request["seed"] = self.seed
         if self.stop_regex:
-            request["stop_regex"] = self.stop_regex
+            request["stop_regex"] = list(self.stop_regex)
         if self.no_stop_trim:
             request["no_stop_trim"] = True
         return request
@@ -117,10 +117,13 @@ class InferenceSettings(BaseModel):
             str(self.context_tokens),
             "--mem-fraction-static",
             "0.8",
+            "--constrained-json-disable-any-whitespace",
         ]
         if model_type == "qwen3_5":
             # Training exports the text backbone, without a vision encoder.
-            arguments.append("--language-only")
+            # Prefill chunking balances prefix granularity and recurrent-state
+            # capacity. Mixed batches advance peers while another game enters prefill.
+            arguments.extend(["--language-only", "--chunked-prefill-size", "4096", "--enable-mixed-chunk"])
         if tool_call_parser is not None:
             arguments.extend(["--tool-call-parser", tool_call_parser])
         if reasoning_parser is not None or self.enable_thinking:

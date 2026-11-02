@@ -144,8 +144,9 @@ def play_coworld(
             artifacts,
             player_seats_schema=job_spec.player_seats_schema,
         )
-    local_ports = resolve_local_extra_ports(package.game.env, allocate_port=_free_local_port)
-    game_env = local_game_env(package.game.env, local_ports)
+    game = PlayerLaunchSpec.from_model(job_spec.game_runnable)
+    local_ports = resolve_local_extra_ports(game.env, allocate_port=_free_local_port)
+    game_env = local_game_env(game.env, local_ports)
 
     run_id = secrets.token_hex(8)
     game_network_alias = f"{LOCAL_GAME_NETWORK_ALIAS_PREFIX}{run_id}"
@@ -166,7 +167,7 @@ def play_coworld(
                     "docker",
                     "run",
                     "--rm",
-                    *package.game.docker_resource_args(),
+                    *game.docker_resource_args(),
                     "--name",
                     game_container,
                     "--network",
@@ -196,7 +197,7 @@ def play_coworld(
                     f"{PLAYER_FAILURE_ENV_VAR}=file://{CONTAINER_WORKDIR}/player_failure.json",
                     "-v",
                     f"{artifacts.workspace}:{CONTAINER_WORKDIR}:rw",
-                    *docker_image_command(package.game),
+                    *docker_image_command(game),
                 ],
                 stdout=game_stdout,
                 stderr=game_stderr,

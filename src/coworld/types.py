@@ -756,6 +756,11 @@ class CoworldVariant(BaseModel):
     name: str = Field(min_length=1, description="Human-readable variant name.")
     game_config: dict[str, Any] = Field(description="Token-free game config that validates against game.config_schema.")
     description: str = Field(min_length=1, description="Human-readable variant description.")
+    game_runnable: CoworldRunnableSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Game implementation for this variant, sharing the Coworld config, results and player contracts.",
+    )
     task_environments: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")], CoworldTaskEnvironment] | None = (
         Field(
             default=None,
@@ -884,6 +889,13 @@ class CoworldManifest(BaseModel):
             if variant.task_environments is not None:
                 yield from variant.task_environments.values()
 
+    def iter_game_runnables(self) -> Iterator[CoworldRunnableSpec]:
+        """Every game implementation, including variants not selected for certification."""
+        yield self.game.runnable
+        for variant in self.variants:
+            if variant.game_runnable is not None:
+                yield variant.game_runnable
+
     def for_episode(self, variant_id: str | None) -> Self:
         """Freeze only the selected task and its environments in an episode snapshot."""
         if variant_id is None:
@@ -893,6 +905,8 @@ class CoworldManifest(BaseModel):
             raise ValueError(f"unknown Coworld variant_id: {variant_id!r}")
         variant = variants[variant_id]
         game = self.game
+        if variant.game_runnable is not None:
+            game = game.model_copy(update={"runnable": variant.game_runnable})
         if variant.task_environments is not None:
             game = game.model_copy(update={"task_environments": variant.task_environments})
         selected = self.model_copy(update={"game": game, "variants": [variant]})
@@ -900,6 +914,8 @@ class CoworldManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_role_types(self) -> "CoworldManifest":
+        if any(runnable.type != "game" for runnable in self.iter_game_runnables()):
+            raise ValueError("Variant game_runnable.type must be 'game'")
         for section in MANIFEST_ROLE_SECTIONS:
             for index, runnable in enumerate(getattr(self, section)):
                 if runnable.type != section:

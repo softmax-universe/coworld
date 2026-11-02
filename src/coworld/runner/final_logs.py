@@ -45,37 +45,47 @@ def main() -> None:
     for status in statuses:
         if status.name == FINAL_LOGS_CONTAINER_NAME or not status.container_id:
             continue
-        try:
-            inference_logs = status.name == LLM_SIDECAR_CONTAINER_NAME
-            byte_limit = (16 if inference_logs else 1) * 1024 * 1024
-            transfer_seconds = 15 if inference_logs else 5
-            deadline = time.monotonic() + transfer_seconds
-            response = core.read_namespaced_pod_log(
-                name=name,
-                namespace=namespace,
-                container=status.name,
-                tail_lines=10000,
-                _request_timeout=5,
-                _preload_content=False,
-            )
+        inference_logs = status.name == LLM_SIDECAR_CONTAINER_NAME
+        instances = (False, True) if status.restart_count else (False,)
+        byte_limit = (16 if inference_logs else 1) * 1024 * 1024 // len(instances)
+        transfer_seconds = 15 if inference_logs else 5
+        deadline = time.monotonic() + transfer_seconds
+        # A restart's first failure can disappear behind the replacement's startup error.
+        # Capture Kubernetes' most recent previous instance within the same container budget.
+        for previous in instances:
+            log_name = f"{status.name} (previous)" if previous else status.name
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                errors[log_name] = f"log transfer exceeded its {transfer_seconds}-second budget"
+                continue
             try:
-                # Server-side limit_bytes drops the end of the selected tail.
-                # Stream instead, keeping the final bytes that include shutdown diagnostics.
-                tail = bytearray()
-                for chunk in response.stream(65536):
-                    tail.extend(chunk)
-                    if len(tail) > byte_limit:
-                        errors[status.name] = f"diagnostic tail exceeded its {byte_limit // (1024 * 1024)} MiB budget"
-                        del tail[:-byte_limit]
-                    if time.monotonic() >= deadline:
-                        errors[status.name] = f"log transfer exceeded its {transfer_seconds}-second budget"
-                        break
-                logs[status.name] = tail.decode("utf-8", errors="replace")
-            finally:
-                response.close()
-                response.release_conn()
-        except (ApiException, HTTPError) as exc:
-            errors[status.name] = str(exc)
+                response = core.read_namespaced_pod_log(
+                    name=name,
+                    namespace=namespace,
+                    container=status.name,
+                    previous=previous,
+                    tail_lines=10000 // len(instances),
+                    _request_timeout=min(5, remaining),
+                    _preload_content=False,
+                )
+                try:
+                    # Server-side limit_bytes drops the end of the selected tail.
+                    # Stream instead, keeping the final bytes that include shutdown diagnostics.
+                    tail = bytearray()
+                    for chunk in response.stream(65536):
+                        tail.extend(chunk)
+                        if len(tail) > byte_limit:
+                            errors[log_name] = f"diagnostic tail exceeded its {byte_limit // 1024} KiB budget"
+                            del tail[:-byte_limit]
+                        if time.monotonic() >= deadline:
+                            errors[log_name] = f"log transfer exceeded its {transfer_seconds}-second budget"
+                            break
+                    logs[log_name] = tail.decode("utf-8", errors="replace")
+                finally:
+                    response.close()
+                    response.release_conn()
+            except (ApiException, HTTPError) as exc:
+                errors[log_name] = str(exc)
     # upload_data already retries transient HTTP/relay failures with bounded backoff.
     capture = FinalLogCapture(
         pod_uid=pod.metadata.uid,

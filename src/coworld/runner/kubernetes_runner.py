@@ -1003,6 +1003,25 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
                         ),
                         policy_types=["Egress"],
                         egress=[
+                            *(
+                                [
+                                    client.V1NetworkPolicyEgressRule(
+                                        to=[
+                                            client.V1NetworkPolicyPeer(
+                                                pod_selector=client.V1LabelSelector(
+                                                    match_labels={
+                                                        "softmax.com/xp-gpu-batch": os.environ["COWORLD_GPU_BATCH_ID"],
+                                                        "coworld-component": "batch",
+                                                    }
+                                                )
+                                            )
+                                        ],
+                                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=8080)],
+                                    )
+                                ]
+                                if "COWORLD_GPU_BATCH_ID" in os.environ
+                                else []
+                            ),
                             client.V1NetworkPolicyEgressRule(
                                 to=[
                                     client.V1NetworkPolicyPeer(
@@ -1796,6 +1815,11 @@ def _create_player_pod(
                 "softmax.com/job-id": job_id,
                 "coworld-component": "player",
                 "coworld-player-slot": str(slot),
+                **(
+                    {"softmax.com/xp-gpu-batch": os.environ["COWORLD_GPU_BATCH_ID"]}
+                    if "COWORLD_GPU_BATCH_ID" in os.environ
+                    else {}
+                ),
                 **({GPU_ALLOCATION_LABEL: os.environ["COWORLD_GPU_ALLOCATION"]} if gpu is not None else {}),
                 **({COWORLD_EGRESS_ENFORCED_LABEL: "true"} if enforced else {}),
                 # coworld-id / league-id / coworld-source are AWS cost-attribution labels, forwarded by the

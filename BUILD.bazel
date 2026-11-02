@@ -100,6 +100,8 @@ _CORE_SRCS = [
     "src/coworld/report.py",
     "src/coworld/runner/__init__.py",
     "src/coworld/runner/bootstrap.py",
+    "src/coworld/runner/gpu_batch.py",
+    "src/coworld/runner/inference_pool.py",
     "src/coworld/runner/pool/__init__.py",
     "src/coworld/runner/pool/types.py",
     "src/coworld/runner/io.py",

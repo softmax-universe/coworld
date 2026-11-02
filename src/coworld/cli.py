@@ -61,6 +61,7 @@ from coworld.manifest_uri import materialized_manifest_path, materialized_replay
 from coworld.optimizer.runtime import OptimizerSetupError, run_optimizer_session
 from coworld.play import PlaySession, ReplaySession, _resolve_local_llm_env, play_coworld, replay_coworld
 from coworld.runner.external_llm import EXTERNAL_LLM_SECRET_KEY, ExternalLlmRoute
+from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.https_egress import HTTPS_HOSTS_SECRET_KEY, HttpsHosts
 from coworld.runner.runner import DEFAULT_PLAYER_EXIT_TIMEOUT_SECONDS, EpisodeArtifacts, run_coworld_episode
 from coworld.stats_cli import stats_app
@@ -1559,6 +1560,13 @@ def upload_policy(
             ),
         ),
     ] = None,
+    shared_inference_model: Annotated[
+        str | None,
+        typer.Option(
+            "--shared-inference-model",
+            help="Opt a compatible Parley GPU image into XP sharing; qwen4-<checkpoint SHA256>.",
+        ),
+    ] = None,
     startup_port: Annotated[
         int | None, typer.Option("--startup-port", help="HTTP readiness port checked before starting the game.")
     ] = None,
@@ -1650,6 +1658,8 @@ def upload_policy(
         if startup_port is not None
         else None
     )
+    if shared_inference_model is not None and (not gpu or startup is None or player_file is not None):
+        raise typer.BadParameter("--shared-inference-model requires an image, --gpu and --startup-port")
     if player_file is not None and (
         resources is not None
         or startup is not None
@@ -1712,6 +1722,7 @@ def upload_policy(
         run=run,
         resources=resources,
         startup=startup,
+        shared_inference=SharedInferenceModel(model=shared_inference_model) if shared_inference_model else None,
         secret_env=parsed_secret_env if parsed_secret_env else None,
         tags=parsed_tags if parsed_tags else None,
         server=server,

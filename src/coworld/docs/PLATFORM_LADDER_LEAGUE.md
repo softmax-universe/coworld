@@ -609,6 +609,27 @@ promoted into competing — never a retroactive sweep, so lowering it on a live 
 submit or promote; the surplus players' live memberships are deactivated, newest memberships surviving. Applies even
 while the ladder is disabled.
 
+### Recover a league paused after exhausted retries
+
+A `retry_exhausted` pause is durable. Deploying code or uploading a new Coworld does not clear it.
+
+1. Read the league's pause reason, failed rounds, frozen episode plans, and job error/debug artifacts. Preserve the
+   failing Coworld ID, source revision, coordinator digest, and attributed seat before changing anything.
+2. Qualify the failure locally with the real roster runtimes. A game-declared file-player fault must remain
+   `player_error` with its `failed_policy_index`, including when other seats use containers. Kubernetes disruption
+   classification applies only to the container seats in the planned roster. Attributed policy faults can score as
+   forfeits; infrastructure faults remain excluded from scoring.
+3. Deploy the matching backend/coordinator bundle and verify its running digest. For a game change, rebuild and upload
+   once, await hosted certification, and read back the intended canonical Coworld version. Old episode plans retain
+   their recorded version; inspect a new plan rather than assuming an upload changed existing work.
+4. Resume the affected league with `POST /v2/leagues/{league_id}/rounds-paused` and `{"paused": false}`. The request
+   clears the pause and wakes scheduling. Keep the existing cadence, retry budget, policy budgets, and rating settings.
+5. Observe a fresh round starting **and completing**, its selected Coworld version, all planned episodes, and published
+   standings. Check any failed episode's typed attribution. If no round starts, inspect the scheduler before using
+   `trigger-round`; do not create duplicate work while the normal scheduler is active.
+
+A successful image build, certified upload, or unpause response alone does not prove league recovery.
+
 ## Maintain an existing platform league
 
 | Change                                                          | How                                                                                                              |

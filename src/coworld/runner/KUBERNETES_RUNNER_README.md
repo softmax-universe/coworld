@@ -7,6 +7,11 @@ The parent Kubernetes `Job` owns the game and coordinator containers. In `platfo
 one child pod per player. In `game-hosted` mode, the trusted init container stages player files and the game executes
 them. The coordinator then uploads the configured artifacts.
 
+Mixed rosters create child pods only for container seats. Game-declared file-player and human-seat failures retain their
+typed verdict and seat attribution without a pod lookup. Container-seat declarations still check Kubernetes status for
+node disruption before assigning policy fault. Pod membership comes from the planned roster, so a missing container pod
+remains an infrastructure failure rather than being mistaken for a game-hosted seat.
+
 Unlike the local Docker runner, the Kubernetes runner does not publish arbitrary extra host TCP ports from the game
 container. `COWORLD_LOCAL_EXTRA_PORTS` is local-runner-only today.
 

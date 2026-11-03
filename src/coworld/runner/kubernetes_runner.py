@@ -2010,39 +2010,42 @@ def _raise_if_game_declared_kubernetes_player_failure(
     if failure is None:
         return
 
-    player_pod_name = next(name for name in player_pod_names if _player_pod_slot(name) == failure.failed_policy_index)
-
-    deadline = time.monotonic() + _PLAYER_FAILURE_CLASSIFICATION_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if all(path.exists() for path in required_artifacts):
-            return
-        try:
-            player_pod = core_v1.read_namespaced_pod(name=player_pod_name, namespace=namespace)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-            raise RunnerEpisodeError(
-                f"{failure.message}; Kubernetes no longer reports player pod {player_pod_name}",
-                error_type="node_disruption",
-            ) from None
-        container_failure = _player_container_failure(
-            player_pod,
-            player_pod_name,
-            failure.failed_policy_index,
-        )
-        if container_failure is not None:
-            dead_seat_statuses[failure.failed_policy_index] = container_failure[0]
-        disruption = _player_pod_disruption(player_pod, has_player_failure=container_failure is not None)
-        if disruption is not None:
-            raise RunnerEpisodeError(
-                f"{failure.message}; Kubernetes reported {disruption} for player pod {player_pod_name}",
-                error_type="node_disruption",
+    # This is the planned container roster, not a query of surviving pods. File and
+    # human seats have no pod; their game-declared failure needs no Kubernetes classification.
+    player_pods_by_slot = {_player_pod_slot(name): name for name in player_pod_names}
+    if failure.failed_policy_index in player_pods_by_slot:
+        player_pod_name = player_pods_by_slot[failure.failed_policy_index]
+        deadline = time.monotonic() + _PLAYER_FAILURE_CLASSIFICATION_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if all(path.exists() for path in required_artifacts):
+                return
+            try:
+                player_pod = core_v1.read_namespaced_pod(name=player_pod_name, namespace=namespace)
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+                raise RunnerEpisodeError(
+                    f"{failure.message}; Kubernetes no longer reports player pod {player_pod_name}",
+                    error_type="node_disruption",
+                ) from None
+            container_failure = _player_container_failure(
+                player_pod,
+                player_pod_name,
+                failure.failed_policy_index,
             )
-        if container_failure is not None:
-            if container_failure[0].exit_code == _PLAYER_TEMPORARY_FAILURE_EXIT_CODE:
-                raise RunnerEpisodeError(container_failure[1], error_type="player_never_started")
-            break
-        time.sleep(_ARTIFACT_POLL_SECONDS)
+            if container_failure is not None:
+                dead_seat_statuses[failure.failed_policy_index] = container_failure[0]
+            disruption = _player_pod_disruption(player_pod, has_player_failure=container_failure is not None)
+            if disruption is not None:
+                raise RunnerEpisodeError(
+                    f"{failure.message}; Kubernetes reported {disruption} for player pod {player_pod_name}",
+                    error_type="node_disruption",
+                )
+            if container_failure is not None:
+                if container_failure[0].exit_code == _PLAYER_TEMPORARY_FAILURE_EXIT_CODE:
+                    raise RunnerEpisodeError(container_failure[1], error_type="player_never_started")
+                break
+            time.sleep(_ARTIFACT_POLL_SECONDS)
 
     if all(path.exists() for path in required_artifacts):
         return

@@ -268,6 +268,7 @@ class TaskPods:
                                                 "SETGID",
                                                 "SETUID",
                                                 "SETFCAP",
+                                                "SYS_CHROOT",
                                             ],
                                         ),
                                         seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),

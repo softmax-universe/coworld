@@ -47,6 +47,9 @@ A successful command returns `kind: completed`, stdout, stderr, and its exit cod
 result. Infrastructure failures have distinct kinds and close the environment. Command output is limited to 1 MiB; files
 are streamed with a 200 MiB limit. Paths must be absolute. JSON bodies are limited to 64 KiB.
 
+File transfers verify byte counts and SHA-256 hashes before acknowledging completion. Task images provide `/bin/sh`,
+`head`, `cat`, `wc`, and `sha256sum` for this protocol. The sender stays open until the receiver confirms complete data.
+
 Creation is idempotent for a key and definition. A closed key stays closed. Fresh verification uses a new key; it never
 reuses the agent's filesystem. Startup and command budgets are separate and both stop at the episode deadline.
 

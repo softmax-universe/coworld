@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -444,7 +445,7 @@ def test_startup_timeout_is_not_command_timeout(control):
 def test_files_and_network_phases(control, tmp_path: Path):
     http, process, core, namespace = control
     token = http.headers["Authorization"].removeprefix("Bearer ")
-    contents = bytes(range(256)) * 8192
+    contents = hashlib.shake_256(b"task-file-transfer").digest(2 * 1024**2 + 38169)
     source = tmp_path / "input.bin"
     source.write_bytes(contents)
     with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
@@ -481,6 +482,75 @@ def test_files_and_network_phases(control, tmp_path: Path):
             assert (tmp_path / "offline.bin").read_bytes() == contents
             assert tasks.set_network(task, NetworkPhase(mode="public")).exit_code == 0
             assert http.post("/tasks/agent/network", json={"mode": "no-network"}).status_code == 409
+        finally:
+            assert tasks.close_task(task).kind == "closed"
+
+
+@pytest.mark.parametrize("control", [True], indirect=True)
+def test_file_upload_rejects_silent_native_writer_corruption(control, tmp_path: Path):
+    http, _process, _core, _namespace = control
+    token = http.headers["Authorization"].removeprefix("Bearer ")
+    source = tmp_path / "patch.bin"
+    source.write_bytes(hashlib.shake_256(b"native-patch-integrity").digest(38169))
+    # Fault injection runs inside the real task: its writer exits zero after changing one byte.
+    corruptor = (
+        "#!/usr/bin/env python\nimport sys\n"
+        "data = sys.stdin.buffer.read(int(sys.argv[-1]))\n"
+        "sys.stdout.buffer.write(bytes([data[0] ^ 255]) + data[1:])\n"
+    )
+    with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
+        task = tasks.create(CreateTask(definition="native", key="corrupt-writer"))
+        try:
+            setup = tasks.execute(
+                task,
+                ExecuteTask(
+                    command=[
+                        "python",
+                        "-c",
+                        "from pathlib import Path; p = Path('/usr/local/bin/head'); "
+                        f"p.write_text({corruptor!r}); p.chmod(0o755)",
+                    ],
+                    timeout_seconds=20,
+                ),
+            )
+            assert setup.kind == "completed" and setup.exit_code == 0
+            uploaded = tasks.upload(task, source, "/tmp/patch.bin")
+            assert uploaded.kind == "completed" and uploaded.exit_code != 0
+        finally:
+            assert tasks.close_task(task).kind == "closed"
+
+
+@pytest.mark.parametrize("control", [True], indirect=True)
+def test_oversized_file_rejected_before_hashing(control):
+    http, _process, _core, _namespace = control
+    token = http.headers["Authorization"].removeprefix("Bearer ")
+    with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
+        task = tasks.create(CreateTask(definition="native", key="oversized-download"))
+        try:
+            setup = tasks.execute(
+                task,
+                ExecuteTask(
+                    command=[
+                        "python",
+                        "-c",
+                        "from pathlib import Path; "
+                        "f = Path('/tmp/oversized.bin').open('wb'); f.truncate(1024**4); f.close(); "
+                        "p = Path('/usr/local/bin/sha256sum'); "
+                        r"p.write_text('#!/bin/sh\ntouch /tmp/hash-called\nexit 99\n'); p.chmod(0o755)",
+                    ],
+                    timeout_seconds=20,
+                ),
+            )
+            assert setup.kind == "completed" and setup.exit_code == 0
+            rejected = http.get("/tasks/oversized-download/file", params={"path": "/tmp/oversized.bin"}, timeout=10)
+            assert rejected.status_code == 409
+            assert rejected.json()["kind"] == "completed" and rejected.json()["exit_code"] == 75
+            assert rejected.json()["stderr"] == "Task download exceeds byte limit\n"
+            healthy = tasks.execute(
+                task,
+                ExecuteTask(command=["/bin/sh", "-ec", "test ! -e /tmp/hash-called; echo ready"], timeout_seconds=10),
+            )
+            assert healthy.kind == "completed" and healthy.exit_code == 0 and healthy.stdout == "ready\n"
         finally:
             assert tasks.close_task(task).kind == "closed"
 

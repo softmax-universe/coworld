@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import shlex
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -90,8 +89,7 @@ class TaskControl:
                         if size > MAX_FILE_BYTES:
                             raise HTTPException(status_code=413, detail="file_too_large")
                         output.write(chunk)
-                command = ["/bin/sh", "-c", f"head -c {size} > {shlex.quote(path)}"]
-                return await asyncio.to_thread(pods.execute, key, command, 300, 65536, input_path=local)
+                return await asyncio.to_thread(pods.upload_file, key, path, local)
 
         @self.app.get("/tasks/{key}/file")
         async def download(key: str, path: str):
@@ -104,12 +102,11 @@ class TaskControl:
             delivered = False
             try:
                 result = await asyncio.to_thread(
-                    pods.execute,
+                    pods.download_file,
                     key,
-                    ["/bin/sh", "-c", f"cat -- {shlex.quote(path)}"],
-                    300,
+                    path,
+                    local,
                     MAX_FILE_BYTES,
-                    output_path=local,
                 )
                 if result.kind != "completed" or result.exit_code != 0:
                     return JSONResponse(status_code=409, content=result.model_dump())

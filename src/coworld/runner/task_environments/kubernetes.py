@@ -29,6 +29,12 @@ from coworld.types import CoworldTaskEnvironment
 
 TASK_LABEL = "coworld-task-owner"
 API_TIMEOUT = (5, 15)
+_FILE_COMMIT = b"coworld-file-commit\n"
+
+
+class _FileReceipt(BaseModel):
+    size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ExecStatusCause(BaseModel):
@@ -403,7 +409,7 @@ class TaskPods:
                     command=command,
                     stderr=True,
                     stdout=True,
-                    stdin=input_path is not None,
+                    stdin=input_path is not None or output_path is not None,
                     binary=True,
                     tty=False,
                     _preload_content=False,
@@ -427,11 +433,54 @@ class TaskPods:
                     finally:
                         self._close(handle)
 
+    def upload_file(self, key: str, path: str, source: Path) -> CommandResult:
+        with source.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        command = [
+            "/bin/sh",
+            "-ec",
+            'head -c "$2" > "$1"; '
+            'actual=$(sha256sum < "$1"); '
+            '[ "$(wc -c < "$1")" -eq "$2" ] && [ "${actual%% *}" = "$3" ] '
+            '|| { printf "Task upload integrity check failed\\n" >&2; exit 74; }; '
+            'printf \'{"size":%s,"sha256":"%s"}\\n\' "$2" "$3"; '
+            'IFS= read -r commit; [ "$commit" = coworld-file-commit ]',
+            "coworld-file-upload",
+            path,
+            str(source.stat().st_size),
+            digest,
+        ]
+        return self.execute(key, command, 300, 65536, input_path=source)
+
+    def download_file(self, key: str, path: str, destination: Path, limit: int) -> CommandResult:
+        command = [
+            "/bin/sh",
+            "-ec",
+            'size=$(wc -c < "$1"); '
+            '[ "$size" -le "$2" ] || { printf "Task download exceeds byte limit\\n" >&2; exit 75; }; '
+            'digest=$(sha256sum < "$1"); '
+            'printf \'{"size":%s,"sha256":"%s"}\\n\' "$size" "${digest%% *}"; '
+            'cat -- "$1"; IFS= read -r commit; [ "$commit" = coworld-file-commit ]',
+            "coworld-file-download",
+            path,
+            str(limit),
+        ]
+        return self.execute(key, command, 300, limit + 256, output_path=destination)
+
     def _command_stream(self, handle, connection, source, target, deadline, max_output_bytes) -> CommandResult:
         key = handle.key
         stdout: list[str] = []
         stderr: list[str] = []
         size = 0
+        receipt: bytes | _FileReceipt = b""
+        received = 0
+        file_digest = hashlib.sha256()
+        committed = False
+        if source is not None:
+            source_size = source.seek(0, 2)
+            source.seek(0)
+            expected_upload = _FileReceipt(size=source_size, sha256=hashlib.file_digest(source, "sha256").hexdigest())
+            source.seek(0)
         next_ping = time.monotonic() + 5
         try:
             while connection.is_open():
@@ -454,11 +503,40 @@ class TaskPods:
                     (stdout, connection.read_stdout(timeout=0)),
                     (stderr, connection.read_stderr(timeout=0)),
                 ):
+                    if not value:
+                        continue
                     size += len(value)
                     if size > max_output_bytes:
                         return CommandResult(kind="output_limit", stdout="".join(stdout), stderr="".join(stderr))
-                    if target is not None and chunks is stdout:
-                        target.write(value)
+                    if chunks is stdout and (source is not None or target is not None):
+                        if committed:
+                            return CommandResult(kind="completion_unknown", stderr="Unexpected file transfer output")
+                        if isinstance(receipt, bytes):
+                            header, separator, value = (receipt + value).partition(b"\n")
+                            if not separator:
+                                if len(header) > 256:
+                                    return CommandResult(kind="completion_unknown", stderr="Invalid file receipt")
+                                receipt = header
+                                continue
+                            receipt = _FileReceipt.model_validate_json(header)
+                        if source is not None:
+                            if receipt != expected_upload or value:
+                                return CommandResult(kind="completion_unknown", stderr="Invalid upload receipt")
+                            connection.write_stdin(_FILE_COMMIT)
+                            committed = True
+                        if target is not None:
+                            target.write(value)
+                            file_digest.update(value)
+                            received += len(value)
+                            if received > receipt.size:
+                                return CommandResult(kind="completion_unknown", stderr="Task download length mismatch")
+                            if received == receipt.size:
+                                if file_digest.hexdigest() != receipt.sha256:
+                                    return CommandResult(
+                                        kind="completion_unknown", stderr="Task download checksum mismatch"
+                                    )
+                                connection.write_stdin(_FILE_COMMIT)
+                                committed = True
                     else:
                         chunks.append(value.decode("utf-8", errors="replace"))
             status_payload = connection.read_channel(ERROR_CHANNEL, timeout=0)
@@ -481,6 +559,8 @@ class TaskPods:
                     stdout="".join(stdout),
                     stderr="".join(stderr) + status_text,
                 )
+            if exit_code == 0 and (source is not None or target is not None) and not committed:
+                return CommandResult(kind="completion_unknown", stderr="Missing file transfer acknowledgement")
             return CommandResult(kind="completed", stdout="".join(stdout), stderr="".join(stderr), exit_code=exit_code)
         finally:
             try:

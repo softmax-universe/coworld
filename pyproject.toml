@@ -47,8 +47,8 @@ test = [
 
 [project.urls]
 Documentation = "https://softmax.com/docs"
-Homepage = "https://github.com/Metta-AI/coworld"
-"Bug Tracker" = "https://github.com/Metta-AI/coworld/issues"
+Homepage = "https://github.com/softmax-universe/coworld"
+"Bug Tracker" = "https://github.com/softmax-universe/coworld/issues"
 
 [project.scripts]
 coworld = "coworld.cli:app"

@@ -18,7 +18,7 @@ from coworld.config import DEFAULT_SUBMIT_SERVER
 from coworld.upload import CoworldListEntry, CoworldUploadClient
 
 DEFAULT_REPO_PREFIX = "coworld-"
-DEFAULT_GITHUB_OWNER = "Metta-AI"
+DEFAULT_GITHUB_OWNER = "softmax-universe"
 
 
 _KNOWN_COWORLD_NAMES = {

@@ -968,7 +968,7 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
     player_launch_start = time.monotonic_ns()
     launched = False
     try:
-        _create_game_service(core_v1, namespace, service_name, job_id, owner_references)
+        game_service = _create_game_service(core_v1, namespace, service_name, job_id, owner_references)
         game_pod_ip = None
         if networking_v1 is not None:
             game_pod_ip = os.environ["POD_IP"]
@@ -983,12 +983,13 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
                     metadata=client.V1ObjectMeta(
                         name=f"{service_name}-player-egress",
                         namespace=namespace,
+                        labels={"job-id": job_id},
                         owner_references=[
                             client.V1OwnerReference(
-                                api_version="batch/v1",
-                                kind="Job",
-                                name=os.environ["JOB_NAME"],
-                                uid=os.environ["JOB_UID"],
+                                api_version="v1",
+                                kind="Service",
+                                name=service_name,
+                                uid=game_service.metadata.uid,
                                 controller=True,
                             )
                         ],
@@ -1026,7 +1027,11 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
                                 to=[
                                     client.V1NetworkPolicyPeer(
                                         pod_selector=client.V1LabelSelector(
-                                            match_labels={"job-id": job_id, "coworld-component": "game"}
+                                            match_labels=TypeAdapter(dict[str, str]).validate_json(
+                                                os.environ["COWORLD_GAME_POD_SELECTOR"]
+                                            )
+                                            if "COWORLD_GAME_POD_SELECTOR" in os.environ
+                                            else {"job-id": job_id, "coworld-component": "game"}
                                         )
                                     )
                                 ],
@@ -1084,7 +1089,7 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
         launched = True
     finally:
         if not launched:
-            _delete_child_resources(core_v1, namespace, service_name, child_names)
+            delete_child_resources(core_v1, namespace, service_name, child_names)
     worker_timings.record("player_launch", player_launch_start)
 
 
@@ -1143,8 +1148,7 @@ def _run_kubernetes_episode(
     worker_start = time.monotonic_ns()
     worker_timings = timings.worker
     egress_enforcement_enabled = os.environ.get("COWORLD_EGRESS_ENFORCEMENT_ENABLED") == "true"
-    if "COWORLD_POOL_ASSIGNMENT" in os.environ:
-        assert job.file_only, "Episode pool requires an all-file roster"
+    if "COWORLD_POOL_ASSIGNMENT" in os.environ and not job.has_player_containers:
         _run_episode_without_player_pods(
             job,
             artifacts,
@@ -1324,7 +1328,7 @@ def _run_kubernetes_episode(
             finally:
                 try:
                     delete_start = time.monotonic_ns()
-                    _delete_child_resources(core_v1, namespace, service_name, child_names)
+                    delete_child_resources(core_v1, namespace, service_name, child_names)
                     worker_timings.record("children_delete", delete_start)
                 finally:
                     if artifact_server is not None:
@@ -1442,6 +1446,7 @@ def _load_incluster_config(*, egress_enforcement_enabled: bool, retry_count: int
     # keeps that key current across kubelet token rotations. Normalizing the
     # key ourselves here would fight that hook (it rewrites the value with a
     # "bearer " prefix on refresh), so this must stay a plain load.
+    egress_enforcement_enabled = egress_enforcement_enabled and "COWORLD_POOL_ASSIGNMENT" not in os.environ
     config.load_incluster_config()
     # Back off on API Priority & Fairness 429s (etcd throttle) rather than failing the
     # episode. Setting .retries on the default Configuration is orthogonal to the api_key
@@ -1522,10 +1527,13 @@ def _create_game_service(
         metadata=client.V1ObjectMeta(
             name=service_name,
             namespace=namespace,
+            labels={"job-id": job_id},
             owner_references=owner_references,
         ),
         spec=client.V1ServiceSpec(
-            selector={"job-id": job_id, "coworld-component": "game"},
+            selector=TypeAdapter(dict[str, str]).validate_json(os.environ["COWORLD_GAME_POD_SELECTOR"])
+            if "COWORLD_GAME_POD_SELECTOR" in os.environ
+            else {"job-id": job_id, "coworld-component": "game"},
             ports=ports,
         ),
     )
@@ -1814,6 +1822,7 @@ def _create_player_pod(
                 "job-id": job_id,
                 "softmax.com/job-id": job_id,
                 "coworld-component": "player",
+                **({"xp-pool-player": "true"} if "COWORLD_POOL_ASSIGNMENT" in os.environ else {}),
                 "coworld-player-slot": str(slot),
                 **(
                     {"softmax.com/xp-gpu-batch": os.environ["COWORLD_GPU_BATCH_ID"]}
@@ -2497,7 +2506,7 @@ def _container_has_started(pod, container_name: str) -> bool:
     return False
 
 
-def _delete_child_resources(core_v1, namespace: str, service_name: str, pod_names: list[str]) -> None:
+def delete_child_resources(core_v1, namespace: str, service_name: str, pod_names: list[str]) -> None:
     for pod_name in pod_names:
         try:
             core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace)

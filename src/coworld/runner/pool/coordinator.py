@@ -207,7 +207,7 @@ def run_assignment(client: PoolClient, assignment: Assignment, profile: Executio
                     "COWORLD_WORKLOAD_TYPE",
                     "COWORLD_CAPACITY_TYPE",
                     "COWORLD_EGRESS_ENFORCEMENT_ENABLED",
-                    "COWORLD_EGRESS_RELAY_URL",
+                    "COWORLD_PLAYER_EGRESS_RELAY_URL",
                     "COWORLD_EGRESS_RELAY_IP",
                     "KUBERNETES_SERVICE_HOST",
                     "KUBERNETES_SERVICE_PORT",

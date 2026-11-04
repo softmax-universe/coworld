@@ -937,6 +937,13 @@ def _upload_debug_archive(
         upload_file(uri, archive, size=archive.tell(), content_type="application/zip")
 
 
+def _player_egress_relay_url() -> str:
+    # Pool workers need the player's relay destination without selecting it for trusted artifact traffic.
+    return os.environ[
+        "COWORLD_PLAYER_EGRESS_RELAY_URL" if "COWORLD_POOL_ASSIGNMENT" in os.environ else "COWORLD_EGRESS_RELAY_URL"
+    ]
+
+
 def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimings) -> None:
     egress_enforcement_enabled = os.environ.get("COWORLD_EGRESS_ENFORCEMENT_ENABLED") == "true"
     api_client = _load_incluster_config(egress_enforcement_enabled=egress_enforcement_enabled)
@@ -972,10 +979,10 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
         game_pod_ip = None
         if networking_v1 is not None:
             game_pod_ip = os.environ["POD_IP"]
-            relay_url = urlsplit(os.environ["COWORLD_EGRESS_RELAY_URL"])
+            relay_url = urlsplit(_player_egress_relay_url())
             relay_port = relay_url.port
             if relay_port is None or relay_url.hostname is None:
-                raise ValueError("COWORLD_EGRESS_RELAY_URL must include the relay Service host and port")
+                raise ValueError("Player egress relay URL must include the relay Service host and port")
             relay_service = relay_url.hostname.split(".", maxsplit=1)[0]
             networking_v1.create_namespaced_network_policy(
                 namespace=namespace,
@@ -1784,9 +1791,9 @@ def _create_player_pod(
     if enforced:
         if game_pod_ip is None:
             raise ValueError("game_pod_ip is required when Coworld egress enforcement is enabled")
-        relay_host = urlsplit(os.environ["COWORLD_EGRESS_RELAY_URL"]).hostname
+        relay_host = urlsplit(_player_egress_relay_url()).hostname
         if relay_host is None:
-            raise ValueError("COWORLD_EGRESS_RELAY_URL must include the relay Service host")
+            raise ValueError("Player egress relay URL must include the relay Service host")
         host_aliases = [
             client.V1HostAlias(ip=game_pod_ip, hostnames=[service_name]),
             client.V1HostAlias(

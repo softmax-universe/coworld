@@ -604,7 +604,7 @@ field. Submission preferences are immutable and the qualification activity loads
 the workflow rather than adding them to Temporal's durable workflow payload. Neither field accepts `secret://` values.
 
 Optional `settings.ladder.players_per_user` caps how many distinct active players one user may hold (`1` = single seat
-per user). Unset defers to the Coworld manifest's `players_per_user` (default 2). Checked when a membership is placed or
+per user). Unset defers to the Coworld manifest's `players_per_user` (default 1). Checked when a membership is placed or
 promoted into competing — never a retroactive sweep, so lowering it on a live league converges as affected users next
 submit or promote; the surplus players' live memberships are deactivated, newest memberships surviving. Applies even
 while the ladder is disabled.

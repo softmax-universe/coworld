@@ -23,7 +23,7 @@ def list_page_payload(response: httpx.Response) -> tuple[list[Any], str | None]:
     return response.json(), response.headers.get(NEXT_CURSOR_HEADER)
 
 
-DEFAULT_OPTIMIZER_REPO = "https://github.com/Metta-AI/optimizers"
+DEFAULT_OPTIMIZER_REPO = "https://github.com/softmax-universe/optimizers"
 DEFAULT_OPTIMIZER_REF = "main"
 DEFAULT_OPTIMIZER_PORT = 3000
 

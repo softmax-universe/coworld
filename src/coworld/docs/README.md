@@ -241,5 +241,6 @@ For a new Coworld, start with [Choose a Player Runtime](PLAYER_RUNTIMES.md). Com
 - Per-role contracts: [GAME.md](roles/GAME.md), [PLAYER.md](roles/PLAYER.md), [COMMISSIONER.md](roles/COMMISSIONER.md),
   [REPORTER.md](roles/REPORTER.md), [GRADER.md](roles/GRADER.md), [DIAGNOSER.md](roles/DIAGNOSER.md),
   [OPTIMIZER.md](roles/OPTIMIZER.md).
-- Shared public role implementations: [Metta-AI/coworld-tools](https://github.com/Metta-AI/coworld-tools) for imported
-  players, commissioners, reporters, graders, diagnosers, and games.
+- Shared public role implementations:
+  [softmax-universe/coworld-tools](https://github.com/softmax-universe/coworld-tools) for imported players,
+  commissioners, reporters, graders, diagnosers, and games.

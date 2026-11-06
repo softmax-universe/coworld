@@ -35,8 +35,8 @@ Player files do not use `run`, `env`, or `resources`. `additionalProperties: fal
 
 `game.player_runtime` defaults to `platform-hosted` (Observatory-hosted container players). `game-hosted` instead stages
 a file per seat for execution inside the game. Both use Kubernetes hosted episodes. Read the
-[runtime guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) before choosing.
-Local Metta source: `packages/coworld/src/coworld/docs/PLAYER_RUNTIMES.md`.
+[runtime guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) before
+choosing. Local Metta source: `packages/coworld/src/coworld/docs/PLAYER_RUNTIMES.md`.
 
 Game-hosted files use package-relative paths before upload and `sha256:` references afterward. Download restores bundled
 files. The game owns the file format, execution limits, isolation, and per-seat output; there is no supplied player
@@ -90,4 +90,4 @@ player runtimes, and analysis routes are unsupported.
 
 - Long-running workbench, NOT a one-shot container
 - Invoked via `coworld optimize`; clones `repository_url` and runs locally
-- Default: `Metta-AI/optimizers`
+- Default: `softmax-universe/optimizers`

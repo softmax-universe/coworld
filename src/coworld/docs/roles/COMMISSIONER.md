@@ -11,8 +11,8 @@ Docker image or `manifest.commissioner[]`.
 
 Public git links (after child-repo sync):
 
-- https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
-- https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md
+- https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
+- https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md
 
 New Coworlds omit `manifest.commissioner[]`. Do not scaffold a commissioner image, bake a `ruleset_strategy` YAML into
 Docker, or use `ux.commissioner` for greenfield leagues.

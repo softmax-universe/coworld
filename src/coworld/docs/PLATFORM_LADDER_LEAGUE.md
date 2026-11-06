@@ -8,8 +8,8 @@ for ongoing league rule changes — container (Docker) commissioners are depreca
 You do **not** need a commissioner container image, a per-game `ruleset_strategy` YAML, or a commissioner runnable in
 the Coworld manifest.
 
-Public Coworld guide (ships with the [`coworld`](https://github.com/Metta-AI/coworld) package). Canonical URL after
-child-repo sync: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
+Public Coworld guide (ships with the [`coworld`](https://github.com/softmax-universe/coworld) package). Canonical URL
+after child-repo sync: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
 
 Companion docs:
 
@@ -275,7 +275,7 @@ contains the native task ID, `game_config`, and optional `task_environments` for
 Keep certification's task configuration and environment in the game defaults.
 
 This uses the ordinary Coworld variant model and existing continuous-grading planner. For comparison,
-[Sugarscape](https://github.com/Metta-AI/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
+[Sugarscape](https://github.com/softmax-universe/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
 declares five variants; its Solo/Duos modes sample an 80-scenario pool inside the selected variant's game configuration.
 A benchmark declares tasks and evaluation conditions as variants within one Coworld. Each league selects an explicit
 population from the pinned release. Each selected variant runs in a separate episode; ordinary admission controls
@@ -693,4 +693,4 @@ Temporal smoke steps: skill `temporal-platform-ladder`.
 - Migrate an existing container league → [MIGRATE_TO_PLATFORM_COMMISSIONER.md](MIGRATE_TO_PLATFORM_COMMISSIONER.md)
 - Deprecated container commissioners → [roles/COMMISSIONER.md](roles/COMMISSIONER.md)
 - Rebuild Coworld manifests → [REBUILDING_COWORLDS.md](REBUILDING_COWORLDS.md)
-- Public GitHub: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
+- Public GitHub: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md

@@ -1310,8 +1310,8 @@ explicit confirmation, wait for hosted certification and upload smoke, then veri
 Audit existing repos from this checkout with:
 
 ```bash
-uv run coworld deploy-audit --owner Metta-AI
-uv run coworld deploy-audit --owner Metta-AI --fail-on-alert
+uv run coworld deploy-audit --owner softmax-universe
+uv run coworld deploy-audit --owner softmax-universe --fail-on-alert
 ```
 
 The audit reports each repo's default branch, Coworld name, active leagues, current canonical version, latest uploaded

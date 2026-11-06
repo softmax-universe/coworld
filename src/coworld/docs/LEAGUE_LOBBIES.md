@@ -1,7 +1,7 @@
 # League Lobbies
 
-Public Coworld guide (ships with the [`coworld`](https://github.com/Metta-AI/coworld) package). Canonical URL after
-child-repo sync: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/LEAGUE_LOBBIES.md
+Public Coworld guide (ships with the [`coworld`](https://github.com/softmax-universe/coworld) package). Canonical URL
+after child-repo sync: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/LEAGUE_LOBBIES.md
 
 Task-focused walkthrough for authors: https://softmax.com/docs/coworld/build-a-coworld/league-lobbies
 

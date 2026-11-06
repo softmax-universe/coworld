@@ -34,7 +34,7 @@ chain, grader philosophy, player policy design, schema contracts) and can be ins
 - Treat Paint Arena under `src/coworld/examples/paintarena/` as the canonical in-tree example.
 - Read the [contract index](.contracts/index.md) before changing a manifest model in `src/coworld/types.py`, a reader or
   converter in `src/coworld/manifest/`, or a fixture in `tests/manifest_versions/`.
-- This file is monorepo contributor guidance and never reaches the public `Metta-AI/coworld` repo. The sync
+- This file is monorepo contributor guidance and never reaches the public `softmax-universe/coworld` repo. The sync
   (`devops/git/push_child_repo.py`) replaces it with [`AGENTS.external.md`](AGENTS.external.md), written for coding
   agents outside Softmax, and drops `.contracts/` from every mirrored commit. Keep that twin free of monorepo commands
   and private paths.
@@ -167,12 +167,12 @@ source of truth. They are generated docs and `$schema` targets; `test_types.py` 
 - [src/coworld/docs/TOURNAMENTS.md](src/coworld/docs/TOURNAMENTS.md) - league bracket tournaments (`tour_...` objects,
   waves, bracket matches) and how to read their episodes via the v2 API.
 - [src/coworld/docs/PLATFORM_LADDER_LEAGUE.md](src/coworld/docs/PLATFORM_LADDER_LEAGUE.md) - create/maintain platform
-  ladder leagues (public; syncs to `Metta-AI/coworld`).
+  ladder leagues (public; syncs to `softmax-universe/coworld`).
 - [src/coworld/docs/LADDER_SEATING.md](src/coworld/docs/LADDER_SEATING.md) - how the platform ladder deals entrants onto
   game seats: per-strategy slot→entrant formulas, `team_layout` geometry, and filler marking. Check it against a game's
   slot→team map before requesting a seed.
 - [src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md](src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md) - cut
-  over from a container commissioner (public; syncs to `Metta-AI/coworld`).
+  over from a container commissioner (public; syncs to `softmax-universe/coworld`).
 - `src/coworld/docs/roles/*.md` - per-role contracts.
 - `src/coworld/docs/artifacts/*.md` - artifact contracts.
 - `src/coworld/runner/RUNNER_README.md` and `src/coworld/runner/KUBERNETES_RUNNER_README.md` - runner-specific behavior.

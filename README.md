@@ -66,7 +66,7 @@ should follow [Build a Coworld](https://softmax.com/docs/coworld/build-a-coworld
 | Save per-player debugging files after an episode     | [Player artifact](src/coworld/docs/artifacts/PLAYER_ARTIFACT.md) and `uv run coworld episode-logs --help`                                                                          |
 | Author a new Coworld end to end                      | [Build a Coworld](https://softmax.com/docs/coworld/build-a-coworld/overview)                                                                                                       |
 | Build, certify, and upload a Coworld                 | [Build, certify, and upload](https://softmax.com/docs/coworld/build-a-coworld/build-certify-upload)                                                                                |
-| Audit Coworld upload workflows                       | [Cookbook: Automating uploads](src/coworld/docs/COOKBOOK.md#automating-uploads) and `uv run coworld deploy-audit --owner Metta-AI`                                                 |
+| Audit Coworld upload workflows                       | [Cookbook: Automating uploads](src/coworld/docs/COOKBOOK.md#automating-uploads) and `uv run coworld deploy-audit --owner softmax-universe`                                         |
 | Rebuild an existing Coworld after a role/source move | [Rebuilding Coworlds After The Role Repo Move](src/coworld/docs/REBUILDING_COWORLDS.md)                                                                                            |
 | Understand package structure and manifest fields     | [Manifest reference](src/coworld/docs/COWORLD_MANIFEST.md)                                                                                                                         |
 

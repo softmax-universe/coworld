@@ -1,7 +1,8 @@
 # Migrate a League to the Platform Commissioner
 
-Public Coworld guide (ships with the [`coworld`](https://github.com/Metta-AI/coworld) package). Canonical URL after
-child-repo sync: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md
+Public Coworld guide (ships with the [`coworld`](https://github.com/softmax-universe/coworld) package). Canonical URL
+after child-repo sync:
+https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md
 
 > **Container (Docker) commissioners are deprecated.** This page is no longer just an upgrade path — it is the
 > **required** path for every container league whose shape the ladder can express, which is all but one of the shapes in
@@ -318,4 +319,5 @@ ladder (`enabled: false`) → archive Qualifiers → enable → unpause → `tri
 
 - Greenfield / day-2 platform leagues → [PLATFORM_LADDER_LEAGUE.md](PLATFORM_LADDER_LEAGUE.md)
 - Deprecated container path → [roles/COMMISSIONER.md](roles/COMMISSIONER.md)
-- Public GitHub: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md
+- Public GitHub:
+  https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/MIGRATE_TO_PLATFORM_COMMISSIONER.md

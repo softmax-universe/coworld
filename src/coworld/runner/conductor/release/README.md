@@ -15,9 +15,9 @@ The adapter writes player-seats/2. Annotations, model access and policy-produced
 
 1. Run **Release experimental Conductor adapter (Scott only)** on current Metta main. It builds the payload, tests the
    adapter with the GOTA fixture without network access, and publishes the saved payload bytes to private
-   `ghcr.io/metta-ai/coworld-conductor-adapter`.
-2. Grant `Metta-AI/foundry` read access in that package's **Manage Actions access**. Keep visibility private. Foundry
-   uses its workflow `GITHUB_TOKEN`; no Metta publication credential is shared.
+   `ghcr.io/softmax-universe/coworld-conductor-adapter`.
+2. Grant the repository running the Conductor consumer workflow read access in that package's **Manage Actions access**.
+   Keep visibility private. The consumer uses its workflow `GITHUB_TOKEN`; no publication credential is shared.
 3. Set Foundry's `CONDUCTOR_GAME_ADAPTER_IMAGE` repository variable to the published immutable digest. Follow Foundry's
    `workspaces/conductor/worlds/deployment.md` for preparation and hosted proof. Changing the payload does not replace
    an already accepted runtime or silently rebuild ready versions.

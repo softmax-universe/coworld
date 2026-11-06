@@ -35,7 +35,7 @@ Polyworld supplies `ANNOTATE(time, kind, function, args)` through its shared pol
 Invalid input, annotation limits, and output failures return status codes without disabling the policy VM. Each seat
 uses one buffered file handle, like policy logs, flushed and closed during existing episode cleanup. Desktop and WASM
 hosts expose the same API and return disabled without a destination. See
-[Polyworld's annotation contract](https://github.com/Metta-AI/polyworld/blob/main/coworld/integration.md#policy-annotations)
+[Polyworld's annotation contract](https://github.com/softmax-universe/polyworld/blob/main/coworld/integration.md#policy-annotations)
 for registration, status codes, buffering, and host coverage.
 
 The event schema, storage layout, and read API can also serve future platform-hosted producers. This implementation

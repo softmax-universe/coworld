@@ -82,6 +82,7 @@ filegroup(
 filegroup(
     name = "manifest_version_fixtures",
     srcs = glob(["manifest_versions/**/*.json"]),
+    visibility = ["//workspaces/observatory/platform/packages/execution/tests:__pkg__"],
 )
 
 # Curated golden fixtures are committed runfiles, so this schema gate is hermetic

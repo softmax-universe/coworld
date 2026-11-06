@@ -137,6 +137,7 @@ def build_llm_sidecar(
     llm_relay_s3_prefix: str = "llm-relay",
     llm_debug_body_s3_bucket: str | None = None,
     openrouter_capture_payloads: bool = True,
+    openrouter_timeout_seconds: float = 60.0,
     spend_limit_usd: str | None = None,
     game_spend_limit_usd: str | None = None,
     player_slot_count: int | None = None,
@@ -228,6 +229,7 @@ def build_llm_sidecar(
             client.V1EnvVar(name="LLM_SIDECAR_CONTRACT_VERSION", value=LLM_SIDECAR_CONTRACT_VERSION),
             client.V1EnvVar(name="LLM_SIDECAR_LISTEN_PORT", value=str(listen_port)),
             client.V1EnvVar(name="LLM_SIDECAR_REGION", value=region),
+            client.V1EnvVar(name="LLM_SIDECAR_OPENROUTER_TIMEOUT_SECONDS", value=str(openrouter_timeout_seconds)),
             # Required per-pod request ceiling protects shared provider capacity.
             client.V1EnvVar(
                 name="LLM_SIDECAR_REQUEST_LIMIT_PER_MINUTE",

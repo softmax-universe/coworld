@@ -68,3 +68,7 @@
   kind: compatible
   summary: Optional per-variant game runnables preserve evaluator images, commands and resources.
   fixture: packages/coworld/tests/manifest_versions/v1/variant_game_runnable_manifest.json
+- schema_hash: 0a8957290e7f4635002b79476db76a93b7527c37b8f1445365a0cccd8e12c05b
+  kind: compatible
+  summary: Optional bounded native game LLM request deadline; omitted declarations retain sixty seconds.
+  fixture: packages/coworld/tests/manifest_versions/v1/game_llm_timeout_manifest.json

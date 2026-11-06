@@ -250,6 +250,14 @@
           "default": null,
           "description": "Opt in to platform-managed private policy memory."
         },
+        "llm_request_timeout_seconds": {
+          "default": 60.0,
+          "description": "Whole-request deadline for game-owned native LLM calls, including provider queue and response time. Omitted declarations retain 60 seconds. Does not extend episode, lease, spend or cancellation limits.",
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Llm Request Timeout Seconds",
+          "type": "number"
+        },
         "player_runtime": {
           "anyOf": [
             {

@@ -123,7 +123,8 @@
         "network_transitions": ["no-network", "public"],
         "max_concurrent_instances": 2
       }
-    }
+    },
+    "llm_request_timeout_seconds": 570.0
   },
   "player": [
     {

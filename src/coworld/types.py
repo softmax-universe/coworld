@@ -672,6 +672,17 @@ class CoworldGameManifest(BaseModel):
     description: str = Field(min_length=1, description="Human-readable game description surfaced by product UIs.")
     owner: str = Field(min_length=1, description="Maintainer email or handle.")
     memory: CoworldMemory | None = Field(default=None, description="Opt in to platform-managed private policy memory.")
+    llm_request_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        le=600,
+        allow_inf_nan=False,
+        exclude_if=lambda value: value == 60.0,
+        description=(
+            "Whole-request deadline for game-owned native LLM calls, including provider queue and response time. "
+            "Omitted declarations retain 60 seconds. Does not extend episode, lease, spend or cancellation limits."
+        ),
+    )
     player_runtime: CoworldPlayerRuntime | Annotated[list[CoworldPlayerRuntime], Field(min_length=1)] = Field(
         default="platform-hosted",
         description=(

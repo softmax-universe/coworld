@@ -612,6 +612,36 @@ class CoworldMemory(BaseModel):
     protocol: Literal["append-v1"] = Field(description="Private append-only policy memory protocol.")
 
 
+class CoworldTaskUser(BaseModel):
+    """A declared Linux identity, including its supplementary groups."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uid: int = Field(ge=0, le=4294967294, description="Linux user ID for command execution.")
+    gid: int = Field(ge=0, le=4294967294, description="Primary Linux group ID for command execution.")
+    home: str = Field(pattern=r"^/[^\x00]*$", description="HOME used by native execution as this image identity.")
+    supplementary_gids: list[Annotated[int, Field(ge=0, le=4294967294)]] = Field(
+        default_factory=list, max_length=64, description="Additional Linux group IDs granted during command execution."
+    )
+
+
+class CoworldTaskCommandUsers(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    default: str = Field(
+        min_length=1, max_length=64, description="Identity alias used when commands omit a user and for file transfers."
+    )
+    identities: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")], CoworldTaskUser] = Field(
+        min_length=1, max_length=16, description="Allowed command-user aliases and their Linux execution identities."
+    )
+
+    @model_validator(mode="after")
+    def validate_default(self) -> CoworldTaskCommandUsers:
+        if self.default not in self.identities:
+            raise ValueError("The default task user must be a declared identity")
+        return self
+
+
 class CoworldTaskEnvironment(BaseModel):
     """An admitted, episode-owned CPU sandbox; never a scored player."""
 
@@ -624,6 +654,10 @@ class CoworldTaskEnvironment(BaseModel):
         ),
     )
     image: str = Field(min_length=1, description="Registered image ID or digest-pinned container image.")
+    command_users: CoworldTaskCommandUsers | None = Field(
+        default=None,
+        description="General tasks may declare command identities; omitted preserves the container image user.",
+    )
     cpu_millis: int = Field(ge=100, le=8000, description="CPU reservation and limit, in thousandths of a core.")
     memory_mib: int = Field(ge=64, le=32768, description="Memory reservation and limit per instance, in MiB.")
     storage_mib: int = Field(
@@ -648,6 +682,8 @@ class CoworldTaskEnvironment(BaseModel):
     @model_validator(mode="after")
     def validate_coding_isolation(self) -> CoworldTaskEnvironment:
         if self.isolation == "coding":
+            if self.command_users is not None:
+                raise ValueError("Coding task environments cannot change command users")
             if self.network != "no-network" or self.network_transitions:
                 raise ValueError("Coding task environments must remain offline")
             if self.memory_mib < 1024:

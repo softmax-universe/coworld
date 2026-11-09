@@ -1,5 +1,9 @@
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <grp.h>
+#include <stdint.h>
+#include <string.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +26,40 @@ static void stop(int signal_number) {
   _exit(0);
 }
 
+static unsigned long identity_number(const char *value) {
+  char *end;
+  errno = 0;
+  unsigned long number = strtoul(value, &end, 10);
+  if (errno || !*value || *end || *value == '-' || number >= UINT32_MAX) {
+    fputs("invalid task identity\n", stderr);
+    exit(1);
+  }
+  return number;
+}
+
 int main(int argc, char **argv) {
+  /* Only coordinator exec starts this path as root. Task commands receive their
+   * declared identity before executing any image-owned program. */
+  if (argc >= 7 && strcmp(argv[1], "--user") == 0) {
+    uid_t uid = (uid_t)identity_number(argv[2]);
+    gid_t gid = (gid_t)identity_number(argv[3]);
+    unsigned long count = identity_number(argv[5]);
+    if (argv[4][0] != '/' || count > 64 || argc <= 6 + (int)count) {
+      fputs("invalid task identity groups\n", stderr);
+      return 1;
+    }
+    gid_t groups[64];
+    for (unsigned long i = 0; i < count; i++)
+      groups[i] = (gid_t)identity_number(argv[6 + i]);
+    if (setenv("HOME", argv[4], 1) || setgroups(count, groups) || setgid(gid) || setuid(uid) ||
+        prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+      perror("set task identity");
+      return 1;
+    }
+    execvp(argv[6 + count], argv + 6 + count);
+    perror("exec task command");
+    return 1;
+  }
   if (argc != 2 || getpid() != 1) {
     fputs("task supervisor requires PID 1 and an absolute expiry\n", stderr);
     return 1;

@@ -1164,6 +1164,33 @@
       "title": "CoworldRunnableSpec",
       "type": "object"
     },
+    "CoworldTaskCommandUsers": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Identity alias used when commands omit a user and for file transfers.",
+          "title": "Default"
+        },
+        "identities": {
+          "description": "Allowed command-user aliases and their Linux execution identities.",
+          "maxProperties": 16,
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z0-9_-]{1,64}$": {
+              "$ref": "#/$defs/CoworldTaskUser"
+            }
+          },
+          "title": "Identities",
+          "type": "object"
+        }
+      },
+      "required": ["default", "identities"],
+      "title": "CoworldTaskCommandUsers",
+      "type": "object"
+    },
     "CoworldTaskEnvironment": {
       "additionalProperties": false,
       "description": "An admitted, episode-owned CPU sandbox; never a scored player.",
@@ -1180,6 +1207,18 @@
           "minLength": 1,
           "title": "Image",
           "type": "string"
+        },
+        "command_users": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoworldTaskCommandUsers"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "General tasks may declare command identities; omitted preserves the container image user."
         },
         "cpu_millis": {
           "description": "CPU reservation and limit, in thousandths of a core.",
@@ -1245,6 +1284,46 @@
       },
       "required": ["image", "cpu_millis", "memory_mib", "storage_mib", "max_instances"],
       "title": "CoworldTaskEnvironment",
+      "type": "object"
+    },
+    "CoworldTaskUser": {
+      "additionalProperties": false,
+      "description": "A declared Linux identity, including its supplementary groups.",
+      "properties": {
+        "uid": {
+          "description": "Linux user ID for command execution.",
+          "maximum": 4294967294,
+          "minimum": 0,
+          "title": "Uid",
+          "type": "integer"
+        },
+        "gid": {
+          "description": "Primary Linux group ID for command execution.",
+          "maximum": 4294967294,
+          "minimum": 0,
+          "title": "Gid",
+          "type": "integer"
+        },
+        "home": {
+          "description": "HOME used by native execution as this image identity.",
+          "pattern": "^/[^\\x00]*$",
+          "title": "Home",
+          "type": "string"
+        },
+        "supplementary_gids": {
+          "description": "Additional Linux group IDs granted during command execution.",
+          "items": {
+            "maximum": 4294967294,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 64,
+          "title": "Supplementary Gids",
+          "type": "array"
+        }
+      },
+      "required": ["uid", "gid", "home"],
+      "title": "CoworldTaskUser",
       "type": "object"
     },
     "CoworldTextDoc": {

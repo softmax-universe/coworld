@@ -72,3 +72,7 @@
   kind: compatible
   summary: Optional bounded native game LLM request deadline; omitted declarations retain sixty seconds.
   fixture: packages/coworld/tests/manifest_versions/v1/game_llm_timeout_manifest.json
+- schema_hash: b469e86bfaaca9a4d9d0ecf0c28c034b6238e2e1936832dbc2322bd7407c5ee3
+  kind: compatible
+  summary: Optional declared command identities for general task environments; omitted declarations retain image users.
+  fixture: packages/coworld/tests/manifest_versions/v1/command_users_manifest.json

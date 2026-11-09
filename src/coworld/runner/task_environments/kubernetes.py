@@ -123,6 +123,7 @@ class TaskPods:
                 return handle
             declared = self.definitions[definition]
             coding = declared.isolation == "coding"
+            supervisor_user = 65534 if coding else (0 if declared.command_users is not None else None)
             if coding:
                 quota = self.core.read_namespaced_resource_quota(
                     "coworld-coding-tasks", self.namespace, _request_timeout=API_TIMEOUT
@@ -257,8 +258,8 @@ class TaskPods:
                                     resources=client.V1ResourceRequirements(requests=quantities, limits=quantities),
                                     security_context=client.V1SecurityContext(
                                         allow_privilege_escalation=False,
-                                        run_as_user=65534 if coding else None,
-                                        run_as_group=65534 if coding else None,
+                                        run_as_user=supervisor_user,
+                                        run_as_group=supervisor_user,
                                         run_as_non_root=True if coding else None,
                                         read_only_root_filesystem=coding,
                                         capabilities=client.V1Capabilities(
@@ -364,11 +365,31 @@ class TaskPods:
         max_output_bytes: int,
         *,
         container: str = "task",
+        user: str | None = None,
         input_path: Path | None = None,
         output_path: Path | None = None,
     ) -> CommandResult:
         with self.lock:
             handle = self.handles[key]
+            declared_users = self.definitions[handle.definition].command_users
+            if container == "task":
+                if declared_users is not None:
+                    selected_user = declared_users.default if user is None else user
+                    if selected_user not in declared_users.identities:
+                        raise TaskRejection("undeclared_command_user")
+                    identity = declared_users.identities[selected_user]
+                    command = [
+                        "/coworld-runtime/supervisor",
+                        "--user",
+                        str(identity.uid),
+                        str(identity.gid),
+                        identity.home,
+                        str(len(identity.supplementary_gids)),
+                        *(str(gid) for gid in identity.supplementary_gids),
+                        *command,
+                    ]
+                elif user is not None:
+                    raise TaskRejection("undeclared_command_user")
             if not self.accepting or key in self.closed or key in self.cancelled:
                 return CommandResult(kind="closed")
             episode_deadline = time.monotonic() + (self.expires_at - datetime.now(UTC)).total_seconds()
@@ -433,7 +454,7 @@ class TaskPods:
                     finally:
                         self._close(handle)
 
-    def upload_file(self, key: str, path: str, source: Path) -> CommandResult:
+    def upload_file(self, key: str, path: str, source: Path, *, user: str | None = None) -> CommandResult:
         with source.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         command = [
@@ -450,9 +471,11 @@ class TaskPods:
             str(source.stat().st_size),
             digest,
         ]
-        return self.execute(key, command, 300, 65536, input_path=source)
+        return self.execute(key, command, 300, 65536, user=user, input_path=source)
 
-    def download_file(self, key: str, path: str, destination: Path, limit: int) -> CommandResult:
+    def download_file(
+        self, key: str, path: str, destination: Path, limit: int, *, user: str | None = None
+    ) -> CommandResult:
         command = [
             "/bin/sh",
             "-ec",
@@ -465,7 +488,7 @@ class TaskPods:
             path,
             str(limit),
         ]
-        return self.execute(key, command, 300, limit + 256, output_path=destination)
+        return self.execute(key, command, 300, limit + 256, user=user, output_path=destination)
 
     def _command_stream(self, handle, connection, source, target, deadline, max_output_bytes) -> CommandResult:
         key = handle.key

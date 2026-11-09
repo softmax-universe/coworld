@@ -21,7 +21,7 @@ import yaml
 from kubernetes import client, config
 from kubernetes.stream import stream
 
-from coworld.task_environment import CreateTask, ExecuteTask, NetworkPhase, TaskEnvironmentClient
+from coworld.task_environment import CreateTask, ExecuteTask, NetworkPhase, TaskEnvironmentClient, TaskHandle
 
 pytestmark = pytest.mark.skipif(
     "METTA_COWORLD_TASK_SYSTEM_CONFIG" not in os.environ,
@@ -100,6 +100,20 @@ def control(tmp_path: Path, request: pytest.FixtureRequest):
                 "definitions": {
                     "native": {
                         "isolation": "coding" if coding else "general",
+                        "command_users": {
+                            "default": "native",
+                            "identities": {
+                                "native": {
+                                    "uid": 65534,
+                                    "gid": 65534,
+                                    "home": "/home/native",
+                                    "supplementary_gids": [12345],
+                                },
+                                "root": {"uid": 0, "gid": 0, "home": "/root"},
+                            },
+                        }
+                        if request.param == "users"
+                        else None,
                         "network": "public" if public else "no-network",
                         "network_transitions": ["no-network", "public"] if public else [],
                         "image": settings["image"],
@@ -160,6 +174,60 @@ def run(http: httpx.Client, key: str, command: str, timeout: float = 20, output_
     )
     response.raise_for_status()
     return response.json()
+
+
+@pytest.mark.parametrize("control", ["users"], indirect=True)
+def test_privileged_setup_preserves_native_nonroot_commands(control, tmp_path):
+    http, process, core, namespace = control
+    created = http.post("/tasks", json={"definition": "native", "key": "native-user"})
+    created.raise_for_status()
+    request = {
+        "user": "root",
+        "command": [
+            "/bin/sh",
+            "-ec",
+            'test "$HOME" = /root; mkdir -p /logs/agent /root-owned; chmod 777 /logs/agent; '
+            "chmod 700 /root-owned; echo private > /root-owned/secret",
+        ],
+        "timeout_seconds": 20,
+    }
+    setup = http.post("/tasks/native-user/exec", json=request)
+    setup.raise_for_status()
+    assert setup.json()["exit_code"] == 0
+    ordinary = run(
+        http,
+        "native-user",
+        'id -u; id -g; id -G; printf "%s\\n" "$HOME"; echo native > /logs/agent/output; cat /root-owned/secret',
+    )
+    assert ordinary["stdout"] == "65534\n65534\n65534 12345\n/home/native\n"
+    assert ordinary["exit_code"] != 0
+    assert "Permission denied" in ordinary["stderr"]
+    assert http.get("/tasks/native-user/file", params={"path": "/logs/agent/output"}).content == b"native\n"
+    source = tmp_path / "setup"
+    source.write_bytes(bytes(range(256)) * 4096)
+    with TaskEnvironmentClient(
+        str(http.base_url), http.headers["Authorization"].removeprefix("Bearer "), timeout_seconds=40
+    ) as tasks:
+        task = TaskHandle.model_validate(created.json())
+        assert tasks.upload(task, source, "/root-owned/setup", user="root").exit_code == 0
+        downloaded = tmp_path / "downloaded"
+        tasks.download(task, "/root-owned/setup", downloaded, user="root")
+        assert downloaded.read_bytes() == source.read_bytes()
+    denied = http.get("/tasks/native-user/file", params={"path": "/root-owned/setup"})
+    assert denied.status_code == 409
+    assert "Permission denied" in denied.json()["stderr"]
+    for method in ("GET", "PUT"):
+        rejected = http.request(
+            method, "/tasks/native-user/file", params={"path": "/root-owned/setup", "user": "undeclared"}
+        )
+        assert rejected.status_code == 409
+        assert rejected.json() == {"kind": "undeclared_command_user"}
+    request["user"] = "undeclared"
+    assert http.post("/tasks/native-user/exec", json=request).json() == {"kind": "undeclared_command_user"}
+    assert run(http, "native-user", "id -u")["stdout"] == "65534\n"
+    assert http.delete("/tasks/native-user").status_code == 200
+    assert run(http, "native-user", "id -u")["kind"] == "closed"
+    assert process.poll() is None
 
 
 def test_fresh_environment_and_cleanup(control):

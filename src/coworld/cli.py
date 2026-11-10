@@ -1307,7 +1307,7 @@ def upload_coworld(
     manifest_path: Annotated[Path | None, typer.Argument(help="Path to coworld_manifest.json.")] = None,
     game_id: Annotated[
         str | None,
-        typer.Option("--game", help="Stable game ID receiving this version; saved for subsequent project uploads."),
+        typer.Option("--game", help="Require this stable game ID to own the uploaded package."),
     ] = None,
     base_coworld: Annotated[
         str | None,

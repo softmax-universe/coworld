@@ -42,7 +42,6 @@ from coworld.manifest import validate_upload_manifest
 from coworld.manifest.registry import read_downloaded_manifest
 from coworld.manifest_validation import validate_coworld_manifest_game_configs
 from coworld.player_files import player_file_bytes, resolve_player_file
-from coworld.project_upload import load_upload_bindings, save_upload_binding, upload_binding_path
 from coworld.replay_viewer import source_replay_viewer_bundle
 from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
@@ -1178,8 +1177,6 @@ def upload_coworld(
     hosted_smoke_timeout_seconds: float = 1800.0,
     hosted_smoke_poll_seconds: float = 5.0,
 ) -> CoworldUploadResult:
-    binding_path = upload_binding_path(manifest_path)
-    game_id = game_id or load_upload_bindings(binding_path).get(server.rstrip("/"))
     with _certification_snapshot(manifest_path) as manifest_path:
         package = load_coworld_package(manifest_path)
         ensure_downloaded_images(package.manifest_path)
@@ -1204,8 +1201,6 @@ def upload_coworld(
             upload_manifest = _submit_wasm_reporters(client, upload_manifest, manifest_path.parent)
             upload_manifest = _submit_replay_viewer_bundle(client, upload_manifest, manifest_path.parent)
             response = client.upload_manifest(upload_manifest, visibility=visibility, game_id=game_id)
-            if response.game_id is not None:
-                save_upload_binding(binding_path, server=server, game_id=response.game_id)
             if wait_for_hosted_smoke:
                 status = get_coworld_status(
                     client,

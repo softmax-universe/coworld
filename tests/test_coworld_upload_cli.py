@@ -49,7 +49,11 @@ class _FakeCoworldUploadClient:
         return None
 
     def upload_manifest(
-        self, manifest: dict[str, object], *, visibility: Literal["public", "private"] | None = None
+        self,
+        manifest: dict[str, object],
+        *,
+        visibility: Literal["public", "private"] | None = None,
+        game_id: str | None = None,
     ) -> CoworldUploadResponse:
         self.uploads.append(manifest)
         return CoworldUploadResponse.model_validate(

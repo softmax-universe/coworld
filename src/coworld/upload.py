@@ -42,6 +42,7 @@ from coworld.manifest import validate_upload_manifest
 from coworld.manifest.registry import read_downloaded_manifest
 from coworld.manifest_validation import validate_coworld_manifest_game_configs
 from coworld.player_files import player_file_bytes, resolve_player_file
+from coworld.project_upload import load_upload_bindings, save_upload_binding, upload_binding_path
 from coworld.replay_viewer import source_replay_viewer_bundle
 from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
@@ -129,6 +130,7 @@ Guidance for coding agents working from this downloaded Coworld package.
 
 class CoworldUploadResponse(BaseModel):
     id: str
+    game_id: str | None = None
     name: str
     version: str
     visibility: Literal["public", "private"]
@@ -421,6 +423,7 @@ class CoworldUploadResult:
     manifest_hash: str
     size_bytes: int
     canonical: bool
+    game_id: str | None = None
     hosted_smoke_episode_ids: tuple[str, ...] = ()
 
 
@@ -483,12 +486,20 @@ class CoworldUploadClient(CoworldHttpClient):
             ) from exc_val
 
     def upload_manifest(
-        self, manifest: dict[str, object], *, visibility: Literal["public", "private"] | None = None
+        self,
+        manifest: dict[str, object],
+        *,
+        visibility: Literal["public", "private"] | None = None,
+        game_id: str | None = None,
     ) -> CoworldUploadResponse:
         return self._post(
             "/v2/coworlds/upload",
             CoworldUploadResponse,
-            json={"manifest": manifest, **({"visibility": visibility} if visibility is not None else {})},
+            json={
+                "manifest": manifest,
+                **({"visibility": visibility} if visibility is not None else {}),
+                **({"game_id": game_id} if game_id is not None else {}),
+            },
             timeout=120.0,
         )
 
@@ -1162,10 +1173,13 @@ def upload_coworld(
     server: str = DEFAULT_SUBMIT_SERVER,
     timeout_seconds: float = 60.0,
     visibility: Literal["public", "private"] | None = None,
+    game_id: str | None = None,
     wait_for_hosted_smoke: bool = False,
     hosted_smoke_timeout_seconds: float = 1800.0,
     hosted_smoke_poll_seconds: float = 5.0,
 ) -> CoworldUploadResult:
+    binding_path = upload_binding_path(manifest_path)
+    game_id = game_id or load_upload_bindings(binding_path).get(server.rstrip("/"))
     with _certification_snapshot(manifest_path) as manifest_path:
         package = load_coworld_package(manifest_path)
         ensure_downloaded_images(package.manifest_path)
@@ -1189,7 +1203,9 @@ def upload_coworld(
             upload_manifest = _submit_player_files(client, upload_manifest, manifest_path.parent)
             upload_manifest = _submit_wasm_reporters(client, upload_manifest, manifest_path.parent)
             upload_manifest = _submit_replay_viewer_bundle(client, upload_manifest, manifest_path.parent)
-            response = client.upload_manifest(upload_manifest, visibility=visibility)
+            response = client.upload_manifest(upload_manifest, visibility=visibility, game_id=game_id)
+            if response.game_id is not None:
+                save_upload_binding(binding_path, server=server, game_id=response.game_id)
             if wait_for_hosted_smoke:
                 status = get_coworld_status(
                     client,
@@ -1205,6 +1221,7 @@ def upload_coworld(
 
     return CoworldUploadResult(
         id=response.id,
+        game_id=response.game_id,
         name=response.name,
         version=response.version,
         manifest_hash=response.manifest_hash,
@@ -1237,7 +1254,7 @@ def upload_coworld_update(
         _validate_manifest_document(manifest)
         _reject_mutable_registry_image_refs(manifest)
         upload_manifest = _manifest_with_softmax_image_ids(client, manifest)
-        response = client.upload_manifest(upload_manifest, visibility=visibility)
+        response = client.upload_manifest(upload_manifest, visibility=visibility, game_id=coworld.game_id)
         if wait_for_hosted_smoke:
             status = get_coworld_status(
                 client,
@@ -1253,6 +1270,7 @@ def upload_coworld_update(
 
     return CoworldUploadResult(
         id=response.id,
+        game_id=response.game_id,
         name=response.name,
         version=response.version,
         manifest_hash=response.manifest_hash,
@@ -1589,6 +1607,7 @@ def upload_coworld_cmd(
     base_coworld: str | None = None,
     server: str = DEFAULT_SUBMIT_SERVER,
     visibility: Literal["public", "private"] | None = None,
+    game_id: str | None = None,
     timeout_seconds: float = 60.0,
     version: str | None = None,
     patch_update: str | None = None,
@@ -1600,6 +1619,8 @@ def upload_coworld_cmd(
     certification_timeout_seconds: float = 1800.0,
 ) -> None:
     if base_coworld is not None:
+        if game_id is not None:
+            raise typer.BadParameter("--game cannot be combined with --from-coworld")
         if manifest_path is not None:
             raise typer.BadParameter("MANIFEST_PATH cannot be combined with --from-coworld")
         result = upload_coworld_update(
@@ -1621,6 +1642,7 @@ def upload_coworld_cmd(
         update_agent_guidance(manifest_path.parent)
         result = upload_coworld(
             manifest_path,
+            game_id=game_id,
             server=server,
             visibility=visibility,
             timeout_seconds=timeout_seconds,
@@ -1634,6 +1656,8 @@ def upload_coworld_cmd(
             typer.echo("Hosted smoke episodes: " + ", ".join(result.hosted_smoke_episode_ids))
     typer.echo(f"Upload complete: {result.name}:{result.version}")
     typer.echo(f"Coworld: {result.id}")
+    if result.game_id is not None:
+        typer.echo(f"Game: {result.game_id}")
     typer.echo(f"Manifest hash: {result.manifest_hash}")
     typer.echo(f"Size: {result.size_bytes} bytes")
     typer.echo(f"Canonical: {'yes' if result.canonical else 'no'}")

@@ -1305,6 +1305,10 @@ def images(
 )
 def upload_coworld(
     manifest_path: Annotated[Path | None, typer.Argument(help="Path to coworld_manifest.json.")] = None,
+    game_id: Annotated[
+        str | None,
+        typer.Option("--game", help="Stable game ID receiving this version; saved for subsequent project uploads."),
+    ] = None,
     base_coworld: Annotated[
         str | None,
         typer.Option(
@@ -1365,6 +1369,7 @@ def upload_coworld(
 ) -> None:
     upload_coworld_cmd(
         manifest_path,
+        game_id=game_id,
         base_coworld=base_coworld,
         server=server,
         visibility=visibility,

@@ -129,7 +129,7 @@ Guidance for coding agents working from this downloaded Coworld package.
 
 class CoworldUploadResponse(BaseModel):
     id: str
-    game_id: str | None = None
+    game_id: str
     name: str
     version: str
     visibility: Literal["public", "private"]
@@ -422,7 +422,7 @@ class CoworldUploadResult:
     manifest_hash: str
     size_bytes: int
     canonical: bool
-    game_id: str | None = None
+    game_id: str
     hosted_smoke_episode_ids: tuple[str, ...] = ()
 
 
@@ -1651,8 +1651,7 @@ def upload_coworld_cmd(
             typer.echo("Hosted smoke episodes: " + ", ".join(result.hosted_smoke_episode_ids))
     typer.echo(f"Upload complete: {result.name}:{result.version}")
     typer.echo(f"Coworld: {result.id}")
-    if result.game_id is not None:
-        typer.echo(f"Game: {result.game_id}")
+    typer.echo(f"Game: {result.game_id}")
     typer.echo(f"Manifest hash: {result.manifest_hash}")
     typer.echo(f"Size: {result.size_bytes} bytes")
     typer.echo(f"Canonical: {'yes' if result.canonical else 'no'}")

@@ -185,6 +185,7 @@ def _coworld_entry(
 ) -> dict[str, object]:
     return {
         "id": coworld_id,
+        "game_id": "game_00000000-0000-0000-0000-000000000111",
         "name": name,
         "version": version,
         "visibility": "public",

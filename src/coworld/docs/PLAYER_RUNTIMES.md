@@ -11,7 +11,7 @@ their own type.
 
 Execution follows the selected episode roster. The runner starts child pods only for container seats. All-file
 experience episodes can use the file worker pool when its existing feature flag and image qualification permit. Human or
-container seats use the regular runner. Conductor remains a separate experimental pilot.
+container seats use the regular runner.
 
 Historical manifests keep their meaning: `player_runtime: platform-hosted` (the default) accepts containers and humans;
 `game-hosted` accepts files and opts into humans with `COGAME_PLAY_SEATS_SCHEMA: coworld-play-seats/1`. New authors

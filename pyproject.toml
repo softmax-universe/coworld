@@ -72,8 +72,6 @@ coworld = [
   "runner/*.md",
   "runner/pool/*.c",
   "runner/task_environments/*.c",
-  "runner/conductor/*",
-  "runner/conductor/examples/*",
   "wit/**/*.wit",
   "examples/**/*",
   "templates/**/*",

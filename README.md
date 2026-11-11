@@ -139,8 +139,6 @@ Publish comparable replay measurements with the [behavior statistics contract](s
 `coworld stats` provides offline schema validation and a batch Paint Arena replay extractor with an HTML evidence
 report.
 
-For the optional Conductor native integration, see the [local adapter guide](src/coworld/runner/conductor/README.md).
-
 ## Contributing
 
 See [Developing Coworld](CONTRIBUTING.md) for API URL pitfalls, manifest changes, and runtime verification.

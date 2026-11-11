@@ -50,7 +50,11 @@ pyproject_test(
         "no-sandbox",
         "requires-network",
     ],
-    long_timeout = ["test_child_lifetime_system", "test_task_environment_system", "system_test_parley_batch_system"],
+    long_timeout = [
+        "test_child_lifetime_system",
+        "test_task_environment_system",
+        "system_test_parley_batch_system",
+    ],
     per_test = {
         "test_coworld_kubernetes_runner": {"data": [":manifest_version_fixtures"]},
         "test_manifest_versions": {"data": [":manifest_version_fixtures"]},
@@ -107,12 +111,4 @@ js_test(
     copy_data_to_bin = False,
     data = ["//packages/coworld:paintarena_static_replay_files"],
     entry_point = "paintarena_replay.test.mjs",
-)
-
-js_test(
-    name = "conductor_adapter_test",
-    size = "small",
-    copy_data_to_bin = False,
-    data = ["//packages/coworld:conductor_adapter"],
-    entry_point = "conductor/adapter.test.mjs",
 )

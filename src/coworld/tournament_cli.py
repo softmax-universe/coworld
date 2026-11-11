@@ -42,10 +42,10 @@ from coworld.api_client import (
 from coworld.cli_support import console, emit_json, print_replay_session
 from coworld.config import DEFAULT_SUBMIT_SERVER, docs_epilog, participation_guide_url
 from coworld.episode_downloads import DownloadResult, download_episodes
-from coworld.episode_replays import materialized_episode_replay
 from coworld.episode_workflows import register_episode_workflows
 from coworld.feed_cli import print_feed_reminder
 from coworld.manifest import read_downloaded_manifest
+from coworld.manifest_uri import materialized_replay_path
 from coworld.play import ReplaySession, replay_coworld
 from coworld.submit import parse_policy_identifier
 from coworld.upload import download_coworld, downloaded_coworld_manifest_path, pull_and_tag_image
@@ -947,11 +947,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
                 replay_manifest_path = Path(manifest_temp_dir) / "coworld_manifest.json"
                 replay_manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             replay_path = stack.enter_context(
-                materialized_episode_replay(
-                    client=client,
-                    episode_request_id=episode_request_id,
-                    replay_uri=episode.replay_url,
-                )
+                materialized_replay_path(episode.replay_url)
             )
             session = replay_coworld(
                 replay_manifest_path,
@@ -1483,9 +1479,7 @@ def _download_replays(
         assert row.replay_url is not None, "replay download rows must have replay_url"
         local_name = f"{row.id}.replay"
         local_path = output_dir / local_name
-        with materialized_episode_replay(
-            client=client, episode_request_id=row.id, replay_uri=row.replay_url
-        ) as replay_path:
+        with materialized_replay_path(row.replay_url) as replay_path:
             shutil.copyfile(replay_path, local_path)
         metadata.append(
             {

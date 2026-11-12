@@ -666,6 +666,21 @@ to any authenticated viewer of the league.
 
 ## Upload And Submit A Player
 
+Save an image policy's editable files with `--source`. Supply a ZIP or an explicitly selected source directory. The
+source stays private to the owner and authorized player credentials, including when the policy enters a public league.
+`--source-entry` identifies the configuration or entry file used by that image.
+
+```bash
+coworld upload-policy my-player:latest --name my-player --source ./policy-source --source-entry bot.py
+coworld attach-policy-source VERSION_UUID --source ./policy-source
+```
+
+The attach command adds source to an existing version. Identical retries retain the same attachment. A different archive
+cannot replace a recorded attachment.
+`coworld build-policy ./policy-source --source ./policy-source --output /tmp/player.tar` builds from a source snapshot,
+saves its ZIP beside the image archive, and prints an upload command for both. Use a selected build context without
+credentials or caches. Image-only uploads remain supported and report that source was omitted.
+
 For a workspace with BuildKit, build directly from the worktree and upload the resulting OCI image archive:
 
 ```bash

@@ -28,7 +28,7 @@ import typer
 from pydantic import BaseModel, Field
 
 from coworld.agent_guidance import update_agent_guidance
-from coworld.api_client import CoworldApiClient, CoworldHttpClient, LeaguePublic, _detail
+from coworld.api_client import CoworldApiClient, LeaguePublic, _detail
 from coworld.bundle import resolve_registry_image_ref
 from coworld.certifier import EXECUTABLE_TRANSCRIPT_PATH, certify_coworld, load_coworld_package
 from coworld.config import (
@@ -42,6 +42,8 @@ from coworld.manifest import validate_upload_manifest
 from coworld.manifest.registry import read_downloaded_manifest
 from coworld.manifest_validation import validate_coworld_manifest_game_configs
 from coworld.player_files import player_file_bytes, resolve_player_file
+from coworld.policy_source import PolicySourceAttachment
+from coworld.policy_source.client import PolicySourceClient
 from coworld.replay_viewer import source_replay_viewer_bundle
 from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
@@ -462,7 +464,7 @@ class CoworldStatusResult:
         return bool(self.hosted_smoke_episodes) and not self.hosted_smoke_failed and not self.hosted_smoke_pending
 
 
-class CoworldUploadClient(CoworldHttpClient):
+class CoworldUploadClient(PolicySourceClient):
     _follow_redirects = False
 
     def __init__(self, server_url: str, token: str):
@@ -936,6 +938,7 @@ class CoworldUploadClient(CoworldHttpClient):
         resources: CoworldRunnableResources | None = None,
         startup: CoworldPlayerStartup | None = None,
         shared_inference: SharedInferenceModel | None = None,
+        source: PolicySourceAttachment | None = None,
     ) -> PolicyVersionResponse:
         policy_secret_env_id: str | None = None
         if secret_env:
@@ -949,6 +952,8 @@ class CoworldUploadClient(CoworldHttpClient):
             policy_secret_env_id = secret_response.json()["id"]
 
         payload: dict[str, Any] = {"container_image_id": container_image_id}
+        if source is not None:
+            payload["source"] = source.model_dump(mode="json")
         if name is not None:
             payload["name"] = name
         if run:
@@ -1704,10 +1709,15 @@ def upload_policy_cmd(
     secret_env: dict[str, str] | None = None,
     tags: dict[str, str] | None = None,
     server: str = DEFAULT_SUBMIT_SERVER,
+    source: Path | None = None,
+    source_entry_paths: list[str] | None = None,
 ) -> None:
     if (image is None) == (player_file is None):
         raise ValueError("Exactly one of image or player_file is required")
+    if source is not None and player_file is not None:
+        raise ValueError("--source accompanies an image; --file already uploads its own bytes")
     with CoworldUploadClient.from_login(server_url=server) as client:
+        attachment = client.stage_policy_source(source, entry_paths=source_entry_paths) if source is not None else None
         if player_file is not None:
             if run or secret_env or resources is not None or startup is not None or shared_inference is not None:
                 raise ValueError(
@@ -1747,11 +1757,20 @@ def upload_policy_cmd(
                 shared_inference=shared_inference,
                 secret_env=secret_env,
                 tags=tags,
+                source=attachment,
             )
+        if attachment is not None:
+            observed = client.policy_source(result.id)
+            if observed.content_hash != attachment.upload.content_hash:
+                raise RuntimeError("Published source readback does not match the uploaded archive")
     if name is None:
         typer.echo(f"Policy name: {result.name} (your player's name; pass --name to choose another)")
     typer.echo(f"Upload complete: {result.name}:v{result.version}")
     typer.echo(f"Policy version ID: {result.id}")
+    if attachment is not None:
+        typer.echo(f"Source SHA-256: {attachment.upload.content_hash}")
+    elif player_file is None:
+        typer.echo("Source not attached. Supply --source to save the editable files.")
     typer.echo("Next: run hosted episodes against live opponents with an Experience Request:")
     typer.echo("  uv run coworld xp-request --help")
     typer.echo(f"Docs: {DOCS_PAGES['upload-and-evaluate']}")

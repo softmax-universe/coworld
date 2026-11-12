@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import shlex
@@ -9,6 +10,7 @@ import sys
 import time
 import uuid
 import webbrowser
+import zipfile
 from contextlib import contextmanager, nullcontext
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -60,6 +62,8 @@ from coworld.manifest.schema_check import check_manifest_schema
 from coworld.manifest_uri import materialized_manifest_path, materialized_replay_path
 from coworld.optimizer.runtime import OptimizerSetupError, run_optimizer_session
 from coworld.play import PlaySession, ReplaySession, _resolve_local_llm_env, play_coworld, replay_coworld
+from coworld.policy_source import pack_source
+from coworld.policy_source.cli import register_policy_source_commands
 from coworld.runner.external_llm import EXTERNAL_LLM_SECRET_KEY, ExternalLlmRoute
 from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.https_egress import HTTPS_HOSTS_SECRET_KEY, HttpsHosts
@@ -110,6 +114,7 @@ app = typer.Typer(
 )
 register_tournament_commands(app)
 register_campaign_commands(app)
+register_policy_source_commands(app)
 register_feed_commands(app)
 app.add_typer(stats_app, name="stats")
 hosted_game_app = typer.Typer(no_args_is_help=True, help="Create and join hosted Coworld games.")
@@ -1458,34 +1463,49 @@ def build_policy(
     dockerfile: Annotated[
         str, typer.Option("--dockerfile", "-f", help="Dockerfile path relative to the context.")
     ] = "Dockerfile",
+    source: Annotated[
+        Path | None,
+        typer.Option(
+            "--source", exists=True, file_okay=False, help="Capture this build context and build from its snapshot."
+        ),
+    ] = None,
     build_arg: Annotated[
         list[str] | None, typer.Option("--build-arg", help="Dockerfile argument KEY=VALUE; repeatable.")
     ] = None,
 ) -> None:
     context = directory.resolve()
     output = output.resolve()
+    if source is not None and source.resolve() != context:
+        raise typer.BadParameter("--source must name the build context directory")
+    source_bytes = pack_source(source) if source is not None else None
     if output.is_relative_to(context):
         raise typer.BadParameter("Place --output outside the build context, for example /tmp/player.tar")
-    command = [
-        "buildctl",
-        "build",
-        "--frontend",
-        "dockerfile.v0",
-        "--local",
-        f"context={context}",
-        "--local",
-        f"dockerfile={context}",
-        "--opt",
-        f"filename={dockerfile}",
-        "--opt",
-        "platform=linux/amd64",
-    ]
-    for argument in build_arg or []:
-        command.extend(["--opt", f"build-arg:{argument}"])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.unlink(missing_ok=True)
     with TemporaryDirectory(prefix="coworld-build-", dir=output.parent) as temporary:
         archive = Path(temporary) / "image.tar"
+        if source_bytes is not None:
+            context = Path(temporary) / "source"
+            with zipfile.ZipFile(io.BytesIO(source_bytes)) as snapshot:
+                snapshot.extractall(context)
+                for member in snapshot.infolist():
+                    (context / member.filename).chmod((member.external_attr >> 16) & 0o777)
+        command = [
+            "buildctl",
+            "build",
+            "--frontend",
+            "dockerfile.v0",
+            "--local",
+            f"context={context}",
+            "--local",
+            f"dockerfile={context}",
+            "--opt",
+            f"filename={dockerfile}",
+            "--opt",
+            "platform=linux/amd64",
+        ]
+        for argument in build_arg or []:
+            command.extend(["--opt", f"build-arg:{argument}"])
         command.extend(
             [
                 "--opt",
@@ -1499,7 +1519,12 @@ def build_policy(
             raise typer.Exit(result.returncode)
         archive.replace(output)
     typer.echo(f"Built policy image: {output}")
-    typer.echo(f"Upload with: coworld upload-policy --image-archive {output}")
+    upload_command = ["coworld", "upload-policy", "--image-archive", str(output)]
+    if source_bytes is not None:
+        source_output = output.with_name(f"{output.name}.source.zip")
+        source_output.write_bytes(source_bytes)
+        upload_command.extend(["--source", str(source_output)])
+    typer.echo(f"Upload with: {shlex.join(upload_command)}")
 
 
 @app.command("policy-lookup")
@@ -1529,6 +1554,13 @@ def upload_policy(
     player_file: Annotated[
         Path | None,
         typer.Option("--file", help="File or directory to upload as a game-hosted player policy."),
+    ] = None,
+    source: Annotated[
+        Path | None, typer.Option("--source", exists=True, help="Private source ZIP or selected directory.")
+    ] = None,
+    source_entry: Annotated[
+        list[str] | None,
+        typer.Option("--source-entry", help="Selected configuration or entry file within the source ZIP."),
     ] = None,
     image_archive: Annotated[
         Path | None,
@@ -1648,6 +1680,8 @@ def upload_policy(
 ) -> None:
     if sum(value is not None for value in (image, player_file, image_archive)) != 1:
         raise typer.BadParameter("Provide exactly one of IMAGE, --image-archive, or --file")
+    if source_entry and source is None:
+        raise typer.BadParameter("--source-entry requires --source")
     resources = None
     if cpu is not None or memory is not None or cpu_limit is not None or gpu or instance_type is not None:
         resources = CoworldRunnableResources(
@@ -1732,6 +1766,7 @@ def upload_policy(
         tags=parsed_tags if parsed_tags else None,
         server=server,
         **({"player_file": player_file} if player_file is not None else {}),
+        **({"source": source, "source_entry_paths": source_entry} if source is not None else {}),
     )
 
 

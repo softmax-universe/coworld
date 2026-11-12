@@ -600,6 +600,9 @@ def test_player_service_gate_waits_for_worker_viewer():
 @pytest.mark.parametrize("local_dev", [False, True])
 def test_create_player_pod_with_native_sidecar_overrides_provider_credentials(monkeypatch, local_dev):
     monkeypatch.setenv("COWORLD_LOCAL_DEV", str(local_dev).lower())
+    monkeypatch.setenv("COWORLD_LOCAL_ARTIFACT_ENDPOINT_URL", "http://floci:4566")
+    monkeypatch.setenv("COWORLD_LOCAL_ARTIFACT_ACCESS_KEY_ID", "local-artifacts")
+    monkeypatch.setenv("COWORLD_LOCAL_ARTIFACT_SECRET_ACCESS_KEY", "local-artifacts-secret")
     created: dict[str, Any] = {}
     core_v1 = SimpleNamespace(create_namespaced_pod=lambda *, namespace, body: created.update({"body": body}))
     monkeypatch.setenv("LLM_SIDECAR_REGION", "us-west-2")
@@ -708,13 +711,21 @@ def test_create_player_pod_with_native_sidecar_overrides_provider_credentials(mo
     assert sidecar_env["LLM_SIDECAR_EGRESS_RELAY_CLIENT_CERT_FILE"] == EGRESS_RELAY_CLIENT_CERT_FILE
     assert sidecar_env["LLM_SIDECAR_EGRESS_RELAY_CLIENT_KEY_FILE"] == EGRESS_RELAY_CLIENT_KEY_FILE
     assert sidecar_env["LLM_SIDECAR_EGRESS_RELAY_CA_FILE"] == EGRESS_RELAY_CA_FILE
-    # Self-provisioned IRSA on the sidecar (not webhook-dependent).
-    assert sidecar_env["AWS_ROLE_ARN"] == "arn:aws:iam::583928386201:role/episode-runner-llm-records"
-    assert sidecar_env["AWS_WEB_IDENTITY_TOKEN_FILE"] == LLM_SIDECAR_TOKEN_FILE
-
-    token_projection = volumes[LLM_SIDECAR_TOKEN_VOLUME_NAME].projected.sources[0].service_account_token
-    assert token_projection.audience == "sts.amazonaws.com"
-    assert token_projection.path == "token"
+    if local_dev:
+        assert sidecar_env["AWS_ENDPOINT_URL_S3"] == "http://floci:4566"
+        assert sidecar_env["AWS_ACCESS_KEY_ID"] == "local-artifacts"
+        assert sidecar_env["AWS_SECRET_ACCESS_KEY"] == "local-artifacts-secret"
+        assert "AWS_ROLE_ARN" not in sidecar_env
+        assert "AWS_WEB_IDENTITY_TOKEN_FILE" not in sidecar_env
+    else:
+        # Self-provisioned IRSA on the sidecar (not webhook-dependent).
+        assert sidecar_env["AWS_ROLE_ARN"] == "arn:aws:iam::583928386201:role/episode-runner-llm-records"
+        assert sidecar_env["AWS_WEB_IDENTITY_TOKEN_FILE"] == LLM_SIDECAR_TOKEN_FILE
+        assert "AWS_ACCESS_KEY_ID" not in sidecar_env
+        assert "AWS_SECRET_ACCESS_KEY" not in sidecar_env
+        token_projection = volumes[LLM_SIDECAR_TOKEN_VOLUME_NAME].projected.sources[0].service_account_token
+        assert token_projection.audience == "sts.amazonaws.com"
+        assert token_projection.path == "token"
 
 
 def test_create_player_pod_routes_every_sidecar_without_exposing_openrouter_key(monkeypatch) -> None:

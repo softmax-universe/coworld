@@ -1610,10 +1610,9 @@ def _create_player_pod(
         player_env["HTTPS_PROXY"] = f"http://127.0.0.1:{GAME_EGRESS_PROXY_PORT}"
         player_env["NO_PROXY"] = f"127.0.0.1,localhost,{service_name}"
     uses_llm = llm_enablement.enabled
+    local_dev = os.environ.get("COWORLD_LOCAL_DEV") == "true"
     local_checkpoint_routing = os.environ.get("COWORLD_LOCAL_CHECKPOINT_ROUTING") == "true"
-    uses_sidecar = uses_llm and (
-        os.environ.get("COWORLD_LOCAL_DEV") != "true" or "LLM_SIDECAR_IMAGE" in os.environ or local_checkpoint_routing
-    )
+    uses_sidecar = uses_llm and (not local_dev or "LLM_SIDECAR_IMAGE" in os.environ or local_checkpoint_routing)
     if uses_sidecar:
         llm_sidecar_port = int(os.environ["LLM_SIDECAR_PORT"])
         # Apply platform endpoints after policy env so saved credentials cannot bypass the sidecar.
@@ -1754,14 +1753,10 @@ def _create_player_pod(
                 openrouter_allowlist_version=os.environ.get("COWORLD_OPENROUTER_ALLOWLIST_VERSION"),
                 egress_relay_url=egress_relay_url,
                 checkpoint_routes_secret_name=os.environ.get("COWORLD_CHECKPOINT_ROUTES_SECRET_NAME"),
-                local_artifact_endpoint_url=os.environ["COWORLD_LOCAL_ARTIFACT_ENDPOINT_URL"]
-                if local_checkpoint_routing
-                else None,
-                local_artifact_access_key_id=os.environ["COWORLD_LOCAL_ARTIFACT_ACCESS_KEY_ID"]
-                if local_checkpoint_routing
-                else None,
+                local_artifact_endpoint_url=os.environ["COWORLD_LOCAL_ARTIFACT_ENDPOINT_URL"] if local_dev else None,
+                local_artifact_access_key_id=os.environ["COWORLD_LOCAL_ARTIFACT_ACCESS_KEY_ID"] if local_dev else None,
                 local_artifact_secret_access_key=os.environ["COWORLD_LOCAL_ARTIFACT_SECRET_ACCESS_KEY"]
-                if local_checkpoint_routing
+                if local_dev
                 else None,
                 runtime_deadline=(
                     os.environ["LLM_SIDECAR_RUNTIME_DEADLINE"]

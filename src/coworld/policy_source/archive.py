@@ -131,6 +131,7 @@ def existing_source_directory(destination: Path, identity: SourceMarker) -> bool
 def materialize_source(
     source: Path, *, content: SourceContent, policy_version_id: str, destination: Path
 ) -> Literal["created", "already_open"]:
+    destination = destination.parent.resolve() / destination.name
     identity = SourceMarker(source_id=policy_version_id, content_hash=content.content_hash)
     if existing_source_directory(destination, identity):
         return "already_open"

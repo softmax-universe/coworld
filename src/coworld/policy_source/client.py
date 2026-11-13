@@ -66,6 +66,7 @@ class PolicySourceClient(CoworldApiClient):
         version = self.resolve_policy_version(ref, player_id=player_id)
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", version.name).strip(".-") or "policy"
         destination = (output_dir or Path("policies") / safe_name / f"v{version.version}").absolute()
+        destination = destination.parent.resolve() / destination.name
         with self._http_client.stream(
             "GET", f"/v2/policy-versions/{version.id}/source/content", headers=self._headers(), timeout=120
         ) as response:

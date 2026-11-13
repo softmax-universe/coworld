@@ -47,6 +47,7 @@ def submit_policy_to_league_cmd(
                 mine=True,
                 limit=200,
                 cursor=cursor,
+                request_id=request_id,
             )
             existing.extend(page.entries)
             if page.next_cursor is None:

@@ -21,13 +21,18 @@ def _query_params(**values: str | int | float | UUID | list[str] | None) -> dict
     return {key: str(value) if isinstance(value, UUID) else value for key, value in values.items() if value is not None}
 
 
-def parse_policy_identifier(identifier: str) -> tuple[str, int | None]:
-    if ":" not in identifier:
-        if not identifier:
-            raise ValueError("Policy name must not be empty")
-        return identifier, None
-    name, version_text = identifier.rsplit(":", 1)
-    version_text = version_text.removeprefix("v")
+def parse_policy_identifier(identifier: str, *, allow_at_version: bool = False) -> tuple[str, int | None]:
+    if not identifier:
+        raise ValueError("Policy name must not be empty")
+    if ":" in identifier:
+        name, version_text = identifier.rsplit(":", 1)
+        version_text = version_text.removeprefix("v")
+    else:
+        if not allow_at_version:
+            return identifier, None
+        name, separator, version_text = identifier.rpartition("@")
+        if not separator or not version_text.isdecimal():
+            return identifier, None
     if not name or not version_text.isdecimal() or int(version_text) <= 0:
         raise ValueError(f"Invalid policy version: {identifier}")
     return name, int(version_text)
@@ -1339,6 +1344,7 @@ class CoworldApiClient(CoworldHttpClient):
         game_name: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        request_id: str | None = None,
     ) -> LeagueSubmissionPage:
         params = _query_params(
             mine=str(mine).lower(),
@@ -1349,7 +1355,10 @@ class CoworldApiClient(CoworldHttpClient):
             limit=limit,
             cursor=cursor,
         )
-        return self._get_page("/v2/league-submissions", LeagueSubmissionPage, LeagueSubmissionPublic, params=params)
+        headers = {"X-Cogent-Request-Id": request_id} if request_id is not None else {}
+        return self._get_page(
+            "/v2/league-submissions", LeagueSubmissionPage, LeagueSubmissionPublic, params=params, headers=headers
+        )
 
     def submit_to_league(
         self,
@@ -1682,13 +1691,13 @@ class CoworldApiClient(CoworldHttpClient):
         return self._get("/stats/policy-versions", PolicyVersionsResponse, params=params)
 
     def lookup_policy_version(
-        self, *, name: str, version: int | None = None, player_id: str | None = None
+        self, *, name: str, version: int | None = None, player_id: str | None = None, mine: bool = True
     ) -> PolicyVersionRow | None:
         rows: list[PolicyVersionRow] = []
         cursor = None
         while True:
             page = self.list_policy_versions(
-                mine=True, name=name, version=version, player_id=player_id, limit=200, cursor=cursor
+                mine=mine, name=name, version=version, player_id=player_id, limit=200, cursor=cursor
             )
             rows.extend(page.entries)
             if page.next_cursor is None:
@@ -1702,17 +1711,25 @@ class CoworldApiClient(CoworldHttpClient):
             raise ValueError(f"Ambiguous policy {name!r}; use --player or a version UUID: {choices}")
         return max(rows, key=lambda row: row.version)
 
-    def resolve_policy_version(self, ref: str, *, player_id: str | None = None) -> PolicyVersionRow:
+    def resolve_policy_version(
+        self, ref: str, *, player_id: str | None = None, mine: bool = True, allow_at_version: bool = False
+    ) -> PolicyVersionRow:
         if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", ref):
-            page = self.list_policy_versions(mine=True, policy_version_id=UUID(ref), player_id=player_id)
+            if not mine:
+                row = self._get(f"/stats/policy-versions/{UUID(ref)}", PolicyVersionRow)
+                if player_id is None or row.player_id == player_id:
+                    return row
+                raise ValueError(f"Policy version {ref} does not belong to player {player_id}")
+            page = self.list_policy_versions(mine=mine, policy_version_id=UUID(ref), player_id=player_id)
             if len(page.entries) == 1:
                 return page.entries[0]
         else:
-            name, version = parse_policy_identifier(ref)
-            row = self.lookup_policy_version(name=name, version=version, player_id=player_id)
+            name, version = parse_policy_identifier(ref, allow_at_version=allow_at_version)
+            row = self.lookup_policy_version(name=name, version=version, player_id=player_id, mine=mine)
             if row is not None:
                 return row
-        raise ValueError(f"Owned policy version not found: {ref}")
+        scope = "Owned" if mine else "Visible"
+        raise ValueError(f"{scope} policy version not found: {ref}")
 
     def create_counterfactual_eval(
         self,

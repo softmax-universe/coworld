@@ -125,6 +125,12 @@ also waits for the full hosted certification transcript.
 The first authenticated upload of a `game.name` establishes its owner. Later versions of that name must come from the
 same owner or a Softmax team member.
 
+Rename the displayed name and website URL from **Manage Coworlds → Rename**. Existing website links keep working.
+Uploaded manifests and their secret namespaces remain unchanged.
+
+Keep the manifest's `game.name` package namespace unchanged when uploading another version. Website renames do not
+change the upload's ownership, version history, or visibility.
+
 Pass `--visibility private` on the first upload to keep the Coworld visible only to its uploader and Softmax team.
 Private uploads stay in the uploader's Coworld list and can run hosted certification. They do not publish images,
 replay bundles, or episode recordings to public storage. Later versions inherit visibility; uploading cannot change it. Public Coworlds remain the default.

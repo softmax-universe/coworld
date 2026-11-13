@@ -33,6 +33,23 @@ a complete editable Parley player. Build and upload your own image; a separate p
 [player project initialization](https://softmax.com/docs/coworld/cli#start-a-player-project) for target requirements,
 generated files, runtime limits, and next steps.
 
+## Inspect your policies
+
+```bash
+coworld submissions --mine --game 'Generals.io' --json
+coworld policies --mine --player ply_... --json
+coworld show-policy my-policy:v3 --json
+coworld pull-policy my-policy:v3 --json
+```
+
+Policy references use exact names or version UUIDs. Use `--player` when a name matches multiple owned players.
+`pull-policy` opens `./policies/<safe-policy-name>/v<N>` and preserves edits when that version is already open. Use a
+fresh `--output-dir` to import the published bytes separately. Its marker records the import, not later edits.
+
+File uploads accept `--player`, `--attributes '{"language":"python"}'`, and `--json`. Submissions accept version UUIDs,
+`--notes`, and `--json`. Machine-readable writes skip optional feed and browser work. Managed environments select their
+bound server through `SOFTMAX_API_URL`; ordinary installations use `softmax login`.
+
 ## Player runtime choice
 
 Authors declare `platform-hosted`, `game-hosted`, or both in `game.player_runtime`. Execution follows the episode
@@ -66,7 +83,7 @@ should follow [Build a Coworld](https://softmax.com/docs/coworld/build-a-coworld
 | Save per-player debugging files after an episode     | [Player artifact](src/coworld/docs/artifacts/PLAYER_ARTIFACT.md) and `uv run coworld episode-logs --help`                                                                          |
 | Author a new Coworld end to end                      | [Build a Coworld](https://softmax.com/docs/coworld/build-a-coworld/overview)                                                                                                       |
 | Build, certify, and upload a Coworld                 | [Build, certify, and upload](https://softmax.com/docs/coworld/build-a-coworld/build-certify-upload)                                                                                |
-| Audit Coworld upload workflows                       | [Cookbook: Automating uploads](src/coworld/docs/COOKBOOK.md#automating-uploads) and `uv run coworld deploy-audit --owner Metta-AI`                                                 |
+| Audit Coworld upload workflows                       | [Cookbook: Automating uploads](src/coworld/docs/COOKBOOK.md#automating-uploads) and `uv run coworld deploy-audit --owner softmax-universe`                                         |
 | Rebuild an existing Coworld after a role/source move | [Rebuilding Coworlds After The Role Repo Move](src/coworld/docs/REBUILDING_COWORLDS.md)                                                                                            |
 | Understand package structure and manifest fields     | [Manifest reference](src/coworld/docs/COWORLD_MANIFEST.md)                                                                                                                         |
 
@@ -138,8 +155,6 @@ Record optional policy decisions with [episode annotations](src/coworld/docs/art
 Publish comparable replay measurements with the [behavior statistics contract](src/coworld/docs/artifacts/STATS.md).
 `coworld stats` provides offline schema validation and a batch Paint Arena replay extractor with an HTML evidence
 report.
-
-For the optional Conductor native integration, see the [local adapter guide](src/coworld/runner/conductor/README.md).
 
 ## Contributing
 

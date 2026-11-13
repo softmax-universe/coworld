@@ -30,7 +30,8 @@ You have deep knowledge files installed alongside this agent. Read them when rel
 
 ## Choose the player runtime before designing players
 
-Read the [runtime decision guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) and
+Read the
+[runtime decision guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) and
 the target manifest's `game.player_runtime`. Authors choose Observatory-hosted (`platform-hosted`, default) container
 clients or `game-hosted` files executed by the game. Explain the tradeoffs before selecting the interface: isolation,
 resources, code visibility, policy secrets, and human/persistent workflow support. For game-hosted players, follow the

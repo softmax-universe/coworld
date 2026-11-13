@@ -937,6 +937,13 @@ def _upload_debug_archive(
         upload_file(uri, archive, size=archive.tell(), content_type="application/zip")
 
 
+def _player_egress_relay_url() -> str:
+    # Pool workers need the player's relay destination without selecting it for trusted artifact traffic.
+    return os.environ[
+        "COWORLD_PLAYER_EGRESS_RELAY_URL" if "COWORLD_POOL_ASSIGNMENT" in os.environ else "COWORLD_EGRESS_RELAY_URL"
+    ]
+
+
 def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimings) -> None:
     egress_enforcement_enabled = os.environ.get("COWORLD_EGRESS_ENFORCEMENT_ENABLED") == "true"
     api_client = _load_incluster_config(egress_enforcement_enabled=egress_enforcement_enabled)
@@ -968,14 +975,14 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
     player_launch_start = time.monotonic_ns()
     launched = False
     try:
-        _create_game_service(core_v1, namespace, service_name, job_id, owner_references)
+        game_service = _create_game_service(core_v1, namespace, service_name, job_id, owner_references)
         game_pod_ip = None
         if networking_v1 is not None:
             game_pod_ip = os.environ["POD_IP"]
-            relay_url = urlsplit(os.environ["COWORLD_EGRESS_RELAY_URL"])
+            relay_url = urlsplit(_player_egress_relay_url())
             relay_port = relay_url.port
             if relay_port is None or relay_url.hostname is None:
-                raise ValueError("COWORLD_EGRESS_RELAY_URL must include the relay Service host and port")
+                raise ValueError("Player egress relay URL must include the relay Service host and port")
             relay_service = relay_url.hostname.split(".", maxsplit=1)[0]
             networking_v1.create_namespaced_network_policy(
                 namespace=namespace,
@@ -983,12 +990,13 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
                     metadata=client.V1ObjectMeta(
                         name=f"{service_name}-player-egress",
                         namespace=namespace,
+                        labels={"job-id": job_id},
                         owner_references=[
                             client.V1OwnerReference(
-                                api_version="batch/v1",
-                                kind="Job",
-                                name=os.environ["JOB_NAME"],
-                                uid=os.environ["JOB_UID"],
+                                api_version="v1",
+                                kind="Service",
+                                name=service_name,
+                                uid=game_service.metadata.uid,
                                 controller=True,
                             )
                         ],
@@ -1026,7 +1034,11 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
                                 to=[
                                     client.V1NetworkPolicyPeer(
                                         pod_selector=client.V1LabelSelector(
-                                            match_labels={"job-id": job_id, "coworld-component": "game"}
+                                            match_labels=TypeAdapter(dict[str, str]).validate_json(
+                                                os.environ["COWORLD_GAME_POD_SELECTOR"]
+                                            )
+                                            if "COWORLD_GAME_POD_SELECTOR" in os.environ
+                                            else {"job-id": job_id, "coworld-component": "game"}
                                         )
                                     )
                                 ],
@@ -1084,7 +1096,7 @@ def _prepare_player_pods(job: CoworldEpisodeJobSpec, worker_timings: ProcessTimi
         launched = True
     finally:
         if not launched:
-            _delete_child_resources(core_v1, namespace, service_name, child_names)
+            delete_child_resources(core_v1, namespace, service_name, child_names)
     worker_timings.record("player_launch", player_launch_start)
 
 
@@ -1143,8 +1155,7 @@ def _run_kubernetes_episode(
     worker_start = time.monotonic_ns()
     worker_timings = timings.worker
     egress_enforcement_enabled = os.environ.get("COWORLD_EGRESS_ENFORCEMENT_ENABLED") == "true"
-    if "COWORLD_POOL_ASSIGNMENT" in os.environ:
-        assert job.file_only, "Episode pool requires an all-file roster"
+    if "COWORLD_POOL_ASSIGNMENT" in os.environ and not job.has_player_containers:
         _run_episode_without_player_pods(
             job,
             artifacts,
@@ -1324,7 +1335,7 @@ def _run_kubernetes_episode(
             finally:
                 try:
                     delete_start = time.monotonic_ns()
-                    _delete_child_resources(core_v1, namespace, service_name, child_names)
+                    delete_child_resources(core_v1, namespace, service_name, child_names)
                     worker_timings.record("children_delete", delete_start)
                 finally:
                     if artifact_server is not None:
@@ -1442,6 +1453,7 @@ def _load_incluster_config(*, egress_enforcement_enabled: bool, retry_count: int
     # keeps that key current across kubelet token rotations. Normalizing the
     # key ourselves here would fight that hook (it rewrites the value with a
     # "bearer " prefix on refresh), so this must stay a plain load.
+    egress_enforcement_enabled = egress_enforcement_enabled and "COWORLD_POOL_ASSIGNMENT" not in os.environ
     config.load_incluster_config()
     # Back off on API Priority & Fairness 429s (etcd throttle) rather than failing the
     # episode. Setting .retries on the default Configuration is orthogonal to the api_key
@@ -1522,10 +1534,13 @@ def _create_game_service(
         metadata=client.V1ObjectMeta(
             name=service_name,
             namespace=namespace,
+            labels={"job-id": job_id},
             owner_references=owner_references,
         ),
         spec=client.V1ServiceSpec(
-            selector={"job-id": job_id, "coworld-component": "game"},
+            selector=TypeAdapter(dict[str, str]).validate_json(os.environ["COWORLD_GAME_POD_SELECTOR"])
+            if "COWORLD_GAME_POD_SELECTOR" in os.environ
+            else {"job-id": job_id, "coworld-component": "game"},
             ports=ports,
         ),
     )
@@ -1595,10 +1610,9 @@ def _create_player_pod(
         player_env["HTTPS_PROXY"] = f"http://127.0.0.1:{GAME_EGRESS_PROXY_PORT}"
         player_env["NO_PROXY"] = f"127.0.0.1,localhost,{service_name}"
     uses_llm = llm_enablement.enabled
+    local_dev = os.environ.get("COWORLD_LOCAL_DEV") == "true"
     local_checkpoint_routing = os.environ.get("COWORLD_LOCAL_CHECKPOINT_ROUTING") == "true"
-    uses_sidecar = uses_llm and (
-        os.environ.get("COWORLD_LOCAL_DEV") != "true" or "LLM_SIDECAR_IMAGE" in os.environ or local_checkpoint_routing
-    )
+    uses_sidecar = uses_llm and (not local_dev or "LLM_SIDECAR_IMAGE" in os.environ or local_checkpoint_routing)
     if uses_sidecar:
         llm_sidecar_port = int(os.environ["LLM_SIDECAR_PORT"])
         # Apply platform endpoints after policy env so saved credentials cannot bypass the sidecar.
@@ -1739,14 +1753,10 @@ def _create_player_pod(
                 openrouter_allowlist_version=os.environ.get("COWORLD_OPENROUTER_ALLOWLIST_VERSION"),
                 egress_relay_url=egress_relay_url,
                 checkpoint_routes_secret_name=os.environ.get("COWORLD_CHECKPOINT_ROUTES_SECRET_NAME"),
-                local_artifact_endpoint_url=os.environ["COWORLD_LOCAL_ARTIFACT_ENDPOINT_URL"]
-                if local_checkpoint_routing
-                else None,
-                local_artifact_access_key_id=os.environ["COWORLD_LOCAL_ARTIFACT_ACCESS_KEY_ID"]
-                if local_checkpoint_routing
-                else None,
+                local_artifact_endpoint_url=os.environ["COWORLD_LOCAL_ARTIFACT_ENDPOINT_URL"] if local_dev else None,
+                local_artifact_access_key_id=os.environ["COWORLD_LOCAL_ARTIFACT_ACCESS_KEY_ID"] if local_dev else None,
                 local_artifact_secret_access_key=os.environ["COWORLD_LOCAL_ARTIFACT_SECRET_ACCESS_KEY"]
-                if local_checkpoint_routing
+                if local_dev
                 else None,
                 runtime_deadline=(
                     os.environ["LLM_SIDECAR_RUNTIME_DEADLINE"]
@@ -1776,9 +1786,9 @@ def _create_player_pod(
     if enforced:
         if game_pod_ip is None:
             raise ValueError("game_pod_ip is required when Coworld egress enforcement is enabled")
-        relay_host = urlsplit(os.environ["COWORLD_EGRESS_RELAY_URL"]).hostname
+        relay_host = urlsplit(_player_egress_relay_url()).hostname
         if relay_host is None:
-            raise ValueError("COWORLD_EGRESS_RELAY_URL must include the relay Service host")
+            raise ValueError("Player egress relay URL must include the relay Service host")
         host_aliases = [
             client.V1HostAlias(ip=game_pod_ip, hostnames=[service_name]),
             client.V1HostAlias(
@@ -1814,6 +1824,7 @@ def _create_player_pod(
                 "job-id": job_id,
                 "softmax.com/job-id": job_id,
                 "coworld-component": "player",
+                **({"xp-pool-player": "true"} if "COWORLD_POOL_ASSIGNMENT" in os.environ else {}),
                 "coworld-player-slot": str(slot),
                 **(
                     {"softmax.com/xp-gpu-batch": os.environ["COWORLD_GPU_BATCH_ID"]}
@@ -2010,39 +2021,42 @@ def _raise_if_game_declared_kubernetes_player_failure(
     if failure is None:
         return
 
-    player_pod_name = next(name for name in player_pod_names if _player_pod_slot(name) == failure.failed_policy_index)
-
-    deadline = time.monotonic() + _PLAYER_FAILURE_CLASSIFICATION_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if all(path.exists() for path in required_artifacts):
-            return
-        try:
-            player_pod = core_v1.read_namespaced_pod(name=player_pod_name, namespace=namespace)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-            raise RunnerEpisodeError(
-                f"{failure.message}; Kubernetes no longer reports player pod {player_pod_name}",
-                error_type="node_disruption",
-            ) from None
-        container_failure = _player_container_failure(
-            player_pod,
-            player_pod_name,
-            failure.failed_policy_index,
-        )
-        if container_failure is not None:
-            dead_seat_statuses[failure.failed_policy_index] = container_failure[0]
-        disruption = _player_pod_disruption(player_pod, has_player_failure=container_failure is not None)
-        if disruption is not None:
-            raise RunnerEpisodeError(
-                f"{failure.message}; Kubernetes reported {disruption} for player pod {player_pod_name}",
-                error_type="node_disruption",
+    # This is the planned container roster, not a query of surviving pods. File and
+    # human seats have no pod; their game-declared failure needs no Kubernetes classification.
+    player_pods_by_slot = {_player_pod_slot(name): name for name in player_pod_names}
+    if failure.failed_policy_index in player_pods_by_slot:
+        player_pod_name = player_pods_by_slot[failure.failed_policy_index]
+        deadline = time.monotonic() + _PLAYER_FAILURE_CLASSIFICATION_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if all(path.exists() for path in required_artifacts):
+                return
+            try:
+                player_pod = core_v1.read_namespaced_pod(name=player_pod_name, namespace=namespace)
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+                raise RunnerEpisodeError(
+                    f"{failure.message}; Kubernetes no longer reports player pod {player_pod_name}",
+                    error_type="node_disruption",
+                ) from None
+            container_failure = _player_container_failure(
+                player_pod,
+                player_pod_name,
+                failure.failed_policy_index,
             )
-        if container_failure is not None:
-            if container_failure[0].exit_code == _PLAYER_TEMPORARY_FAILURE_EXIT_CODE:
-                raise RunnerEpisodeError(container_failure[1], error_type="player_never_started")
-            break
-        time.sleep(_ARTIFACT_POLL_SECONDS)
+            if container_failure is not None:
+                dead_seat_statuses[failure.failed_policy_index] = container_failure[0]
+            disruption = _player_pod_disruption(player_pod, has_player_failure=container_failure is not None)
+            if disruption is not None:
+                raise RunnerEpisodeError(
+                    f"{failure.message}; Kubernetes reported {disruption} for player pod {player_pod_name}",
+                    error_type="node_disruption",
+                )
+            if container_failure is not None:
+                if container_failure[0].exit_code == _PLAYER_TEMPORARY_FAILURE_EXIT_CODE:
+                    raise RunnerEpisodeError(container_failure[1], error_type="player_never_started")
+                break
+            time.sleep(_ARTIFACT_POLL_SECONDS)
 
     if all(path.exists() for path in required_artifacts):
         return
@@ -2494,7 +2508,7 @@ def _container_has_started(pod, container_name: str) -> bool:
     return False
 
 
-def _delete_child_resources(core_v1, namespace: str, service_name: str, pod_names: list[str]) -> None:
+def delete_child_resources(core_v1, namespace: str, service_name: str, pod_names: list[str]) -> None:
     for pod_name in pod_names:
         try:
             core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace)

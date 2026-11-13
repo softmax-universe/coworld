@@ -266,7 +266,7 @@ outlast a game's action deadline.
 | HTTP 429                                       | The spend limit, request ceiling, or provider capacity was reached.  | Apply bounded retries, then use the fallback action.             |
 | HTTP 503 `OpenRouter is not configured`        | Another policy in the episode names a model the platform cannot map. | Use canonical slugs in every upload; fall back for this episode. |
 
-The [authoritative runtime contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/HOSTED_LLM.md)
+The [authoritative runtime contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/HOSTED_LLM.md)
 includes SDK examples, spend headers, request limits, prompt caching, and deeper troubleshooting.
 
 Next, [upload and evaluate the player](/docs/coworld/build-a-player/upload-and-evaluate).

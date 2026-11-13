@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -20,7 +21,7 @@ import yaml
 from kubernetes import client, config
 from kubernetes.stream import stream
 
-from coworld.task_environment import CreateTask, ExecuteTask, NetworkPhase, TaskEnvironmentClient
+from coworld.task_environment import CreateTask, ExecuteTask, NetworkPhase, TaskEnvironmentClient, TaskHandle
 
 pytestmark = pytest.mark.skipif(
     "METTA_COWORLD_TASK_SYSTEM_CONFIG" not in os.environ,
@@ -99,6 +100,20 @@ def control(tmp_path: Path, request: pytest.FixtureRequest):
                 "definitions": {
                     "native": {
                         "isolation": "coding" if coding else "general",
+                        "command_users": {
+                            "default": "native",
+                            "identities": {
+                                "native": {
+                                    "uid": 65534,
+                                    "gid": 65534,
+                                    "home": "/home/native",
+                                    "supplementary_gids": [12345],
+                                },
+                                "root": {"uid": 0, "gid": 0, "home": "/root"},
+                            },
+                        }
+                        if request.param == "users"
+                        else None,
                         "network": "public" if public else "no-network",
                         "network_transitions": ["no-network", "public"] if public else [],
                         "image": settings["image"],
@@ -161,6 +176,60 @@ def run(http: httpx.Client, key: str, command: str, timeout: float = 20, output_
     return response.json()
 
 
+@pytest.mark.parametrize("control", ["users"], indirect=True)
+def test_privileged_setup_preserves_native_nonroot_commands(control, tmp_path):
+    http, process, core, namespace = control
+    created = http.post("/tasks", json={"definition": "native", "key": "native-user"})
+    created.raise_for_status()
+    request = {
+        "user": "root",
+        "command": [
+            "/bin/sh",
+            "-ec",
+            'test "$HOME" = /root; mkdir -p /logs/agent /root-owned; chmod 777 /logs/agent; '
+            "chmod 700 /root-owned; echo private > /root-owned/secret",
+        ],
+        "timeout_seconds": 20,
+    }
+    setup = http.post("/tasks/native-user/exec", json=request)
+    setup.raise_for_status()
+    assert setup.json()["exit_code"] == 0
+    ordinary = run(
+        http,
+        "native-user",
+        'id -u; id -g; id -G; printf "%s\\n" "$HOME"; echo native > /logs/agent/output; cat /root-owned/secret',
+    )
+    assert ordinary["stdout"] == "65534\n65534\n65534 12345\n/home/native\n"
+    assert ordinary["exit_code"] != 0
+    assert "Permission denied" in ordinary["stderr"]
+    assert http.get("/tasks/native-user/file", params={"path": "/logs/agent/output"}).content == b"native\n"
+    source = tmp_path / "setup"
+    source.write_bytes(bytes(range(256)) * 4096)
+    with TaskEnvironmentClient(
+        str(http.base_url), http.headers["Authorization"].removeprefix("Bearer "), timeout_seconds=40
+    ) as tasks:
+        task = TaskHandle.model_validate(created.json())
+        assert tasks.upload(task, source, "/root-owned/setup", user="root").exit_code == 0
+        downloaded = tmp_path / "downloaded"
+        tasks.download(task, "/root-owned/setup", downloaded, user="root")
+        assert downloaded.read_bytes() == source.read_bytes()
+    denied = http.get("/tasks/native-user/file", params={"path": "/root-owned/setup"})
+    assert denied.status_code == 409
+    assert "Permission denied" in denied.json()["stderr"]
+    for method in ("GET", "PUT"):
+        rejected = http.request(
+            method, "/tasks/native-user/file", params={"path": "/root-owned/setup", "user": "undeclared"}
+        )
+        assert rejected.status_code == 409
+        assert rejected.json() == {"kind": "undeclared_command_user"}
+    request["user"] = "undeclared"
+    assert http.post("/tasks/native-user/exec", json=request).json() == {"kind": "undeclared_command_user"}
+    assert run(http, "native-user", "id -u")["stdout"] == "65534\n"
+    assert http.delete("/tasks/native-user").status_code == 200
+    assert run(http, "native-user", "id -u")["kind"] == "closed"
+    assert process.poll() is None
+
+
 def test_fresh_environment_and_cleanup(control):
     http, process, core, namespace = control
     assert (
@@ -180,6 +249,7 @@ def test_fresh_environment_and_cleanup(control):
     assert pod.metadata.owner_references[0].name == "coordinator"
     assert http.post("/tasks", json=request).json() == first.json()
     assert run(http, "agent", "echo agent > /tmp/agent-sentinel; echo ready")["stdout"] == "ready\n"
+    assert run(http, "agent", "chroot / /bin/sh -c 'echo chroot-ready'")["stdout"] == "chroot-ready\n"
     assert http.delete("/tasks/agent").status_code == 200
     assert http.post("/tasks", json=request).json() == {"kind": "task_closed"}
     fresh = http.post("/tasks", json={"definition": "native", "key": "verifier"})
@@ -443,7 +513,7 @@ def test_startup_timeout_is_not_command_timeout(control):
 def test_files_and_network_phases(control, tmp_path: Path):
     http, process, core, namespace = control
     token = http.headers["Authorization"].removeprefix("Bearer ")
-    contents = bytes(range(256)) * 8192
+    contents = hashlib.shake_256(b"task-file-transfer").digest(2 * 1024**2 + 38169)
     source = tmp_path / "input.bin"
     source.write_bytes(contents)
     with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
@@ -480,6 +550,75 @@ def test_files_and_network_phases(control, tmp_path: Path):
             assert (tmp_path / "offline.bin").read_bytes() == contents
             assert tasks.set_network(task, NetworkPhase(mode="public")).exit_code == 0
             assert http.post("/tasks/agent/network", json={"mode": "no-network"}).status_code == 409
+        finally:
+            assert tasks.close_task(task).kind == "closed"
+
+
+@pytest.mark.parametrize("control", [True], indirect=True)
+def test_file_upload_rejects_silent_native_writer_corruption(control, tmp_path: Path):
+    http, _process, _core, _namespace = control
+    token = http.headers["Authorization"].removeprefix("Bearer ")
+    source = tmp_path / "patch.bin"
+    source.write_bytes(hashlib.shake_256(b"native-patch-integrity").digest(38169))
+    # Fault injection runs inside the real task: its writer exits zero after changing one byte.
+    corruptor = (
+        "#!/usr/bin/env python\nimport sys\n"
+        "data = sys.stdin.buffer.read(int(sys.argv[-1]))\n"
+        "sys.stdout.buffer.write(bytes([data[0] ^ 255]) + data[1:])\n"
+    )
+    with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
+        task = tasks.create(CreateTask(definition="native", key="corrupt-writer"))
+        try:
+            setup = tasks.execute(
+                task,
+                ExecuteTask(
+                    command=[
+                        "python",
+                        "-c",
+                        "from pathlib import Path; p = Path('/usr/local/bin/head'); "
+                        f"p.write_text({corruptor!r}); p.chmod(0o755)",
+                    ],
+                    timeout_seconds=20,
+                ),
+            )
+            assert setup.kind == "completed" and setup.exit_code == 0
+            uploaded = tasks.upload(task, source, "/tmp/patch.bin")
+            assert uploaded.kind == "completed" and uploaded.exit_code != 0
+        finally:
+            assert tasks.close_task(task).kind == "closed"
+
+
+@pytest.mark.parametrize("control", [True], indirect=True)
+def test_oversized_file_rejected_before_hashing(control):
+    http, _process, _core, _namespace = control
+    token = http.headers["Authorization"].removeprefix("Bearer ")
+    with TaskEnvironmentClient(str(http.base_url), token, timeout_seconds=40) as tasks:
+        task = tasks.create(CreateTask(definition="native", key="oversized-download"))
+        try:
+            setup = tasks.execute(
+                task,
+                ExecuteTask(
+                    command=[
+                        "python",
+                        "-c",
+                        "from pathlib import Path; "
+                        "f = Path('/tmp/oversized.bin').open('wb'); f.truncate(1024**4); f.close(); "
+                        "p = Path('/usr/local/bin/sha256sum'); "
+                        r"p.write_text('#!/bin/sh\ntouch /tmp/hash-called\nexit 99\n'); p.chmod(0o755)",
+                    ],
+                    timeout_seconds=20,
+                ),
+            )
+            assert setup.kind == "completed" and setup.exit_code == 0
+            rejected = http.get("/tasks/oversized-download/file", params={"path": "/tmp/oversized.bin"}, timeout=10)
+            assert rejected.status_code == 409
+            assert rejected.json()["kind"] == "completed" and rejected.json()["exit_code"] == 75
+            assert rejected.json()["stderr"] == "Task download exceeds byte limit\n"
+            healthy = tasks.execute(
+                task,
+                ExecuteTask(command=["/bin/sh", "-ec", "test ! -e /tmp/hash-called; echo ready"], timeout_seconds=10),
+            )
+            assert healthy.kind == "completed" and healthy.exit_code == 0 and healthy.stdout == "ready\n"
         finally:
             assert tasks.close_task(task).kind == "closed"
 

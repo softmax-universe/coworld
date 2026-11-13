@@ -8,8 +8,8 @@ for ongoing league rule changes — container (Docker) commissioners are depreca
 You do **not** need a commissioner container image, a per-game `ruleset_strategy` YAML, or a commissioner runnable in
 the Coworld manifest.
 
-Public Coworld guide (ships with the [`coworld`](https://github.com/Metta-AI/coworld) package). Canonical URL after
-child-repo sync: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
+Public Coworld guide (ships with the [`coworld`](https://github.com/softmax-universe/coworld) package). Canonical URL
+after child-repo sync: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
 
 Companion docs:
 
@@ -275,7 +275,7 @@ contains the native task ID, `game_config`, and optional `task_environments` for
 Keep certification's task configuration and environment in the game defaults.
 
 This uses the ordinary Coworld variant model and existing continuous-grading planner. For comparison,
-[Sugarscape](https://github.com/Metta-AI/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
+[Sugarscape](https://github.com/softmax-universe/coworld-sugarscape/blob/89c2b3ea2ea890a2313e22e55ef08cfcba5582ac/README.md)
 declares five variants; its Solo/Duos modes sample an 80-scenario pool inside the selected variant's game configuration.
 A benchmark declares tasks and evaluation conditions as variants within one Coworld. Each league selects an explicit
 population from the pinned release. Each selected variant runs in a separate episode; ordinary admission controls
@@ -604,10 +604,31 @@ field. Submission preferences are immutable and the qualification activity loads
 the workflow rather than adding them to Temporal's durable workflow payload. Neither field accepts `secret://` values.
 
 Optional `settings.ladder.players_per_user` caps how many distinct active players one user may hold (`1` = single seat
-per user). Unset defers to the Coworld manifest's `players_per_user` (default 2). Checked when a membership is placed or
+per user). Unset defers to the Coworld manifest's `players_per_user` (default 1). Checked when a membership is placed or
 promoted into competing — never a retroactive sweep, so lowering it on a live league converges as affected users next
 submit or promote; the surplus players' live memberships are deactivated, newest memberships surviving. Applies even
 while the ladder is disabled.
+
+### Recover a league paused after exhausted retries
+
+A `retry_exhausted` pause is durable. Deploying code or uploading a new Coworld does not clear it.
+
+1. Read the league's pause reason, failed rounds, frozen episode plans, and job error/debug artifacts. Preserve the
+   failing Coworld ID, source revision, coordinator digest, and attributed seat before changing anything.
+2. Qualify the failure locally with the real roster runtimes. A game-declared file-player fault must remain
+   `player_error` with its `failed_policy_index`, including when other seats use containers. Kubernetes disruption
+   classification applies only to the container seats in the planned roster. Attributed policy faults can score as
+   forfeits; infrastructure faults remain excluded from scoring.
+3. Deploy the matching backend/coordinator bundle and verify its running digest. For a game change, rebuild and upload
+   once, await hosted certification, and read back the intended canonical Coworld version. Old episode plans retain
+   their recorded version; inspect a new plan rather than assuming an upload changed existing work.
+4. Resume the affected league with `POST /v2/leagues/{league_id}/rounds-paused` and `{"paused": false}`. The request
+   clears the pause and wakes scheduling. Keep the existing cadence, retry budget, policy budgets, and rating settings.
+5. Observe a fresh round starting **and completing**, its selected Coworld version, all planned episodes, and published
+   standings. Check any failed episode's typed attribution. If no round starts, inspect the scheduler before using
+   `trigger-round`; do not create duplicate work while the normal scheduler is active.
+
+A successful image build, certified upload, or unpause response alone does not prove league recovery.
 
 ## Maintain an existing platform league
 
@@ -672,4 +693,4 @@ Temporal smoke steps: skill `temporal-platform-ladder`.
 - Migrate an existing container league → [MIGRATE_TO_PLATFORM_COMMISSIONER.md](MIGRATE_TO_PLATFORM_COMMISSIONER.md)
 - Deprecated container commissioners → [roles/COMMISSIONER.md](roles/COMMISSIONER.md)
 - Rebuild Coworld manifests → [REBUILDING_COWORLDS.md](REBUILDING_COWORLDS.md)
-- Public GitHub: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md
+- Public GitHub: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLATFORM_LADDER_LEAGUE.md

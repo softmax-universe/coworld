@@ -347,7 +347,7 @@ def assert_episode_images_reachable(job: CoworldEpisodeJobSpec, *, require_linux
                 "DOCKER_DEFAULT_PLATFORM is not set to linux/amd64: "
                 f"{', '.join(amd64_only_images)}\n"
                 "Enable Rosetta in OrbStack, then run: export DOCKER_DEFAULT_PLATFORM=linux/amd64\n"
-                "Setup: https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/MACOS.md",
+                "Setup: https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/MACOS.md",
                 file=sys.stderr,
             )
 

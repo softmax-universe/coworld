@@ -3,8 +3,9 @@ from typing import Any
 import httpx
 
 from softmax.docs import DOCS_URL
+from softmax_client.auth import get_api_server
 
-DEFAULT_SUBMIT_SERVER = "https://softmax.com/api"
+DEFAULT_SUBMIT_SERVER = get_api_server()
 
 
 def participation_guide_url(server: str, league_id: str) -> str:
@@ -23,7 +24,7 @@ def list_page_payload(response: httpx.Response) -> tuple[list[Any], str | None]:
     return response.json(), response.headers.get(NEXT_CURSOR_HEADER)
 
 
-DEFAULT_OPTIMIZER_REPO = "https://github.com/Metta-AI/optimizers"
+DEFAULT_OPTIMIZER_REPO = "https://github.com/softmax-universe/optimizers"
 DEFAULT_OPTIMIZER_REF = "main"
 DEFAULT_OPTIMIZER_PORT = 3000
 

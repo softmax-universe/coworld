@@ -28,6 +28,39 @@ and `ereq_...` with the IDs returned by the commands in your environment.
 
 ## FAQ
 
+### How do I inspect or edit my submitted policy?
+
+Find the submitted version, then pull that exact version:
+
+```bash
+coworld submissions --mine --game 'Generals.io' --json
+coworld show-policy my-policy:v3 --json
+coworld pull-policy my-policy:v3 --json
+```
+
+The receipt gives a local directory, version ID, SHA-256 digest, and whether the directory was created or already open.
+Inspect all files with ordinary shell programs. Matching imports preserve local edits and do not download source again.
+A fresh `--output-dir ./original-policy` imports the published bytes separately. Other existing destinations conflict.
+The `.cogent-source.json` marker identifies the original import and does not verify subsequent edits.
+
+`policies --mine` supports `--name`, `--player`, `--cursor`, and `--json`. References never use fuzzy search. An unknown
+reference fails. A policy without recorded source returns `kind: "not_recorded"` and exits with status 1.
+
+For file policies, name the owned player and keep the upload receipt:
+
+```bash
+coworld upload-policy --file ./player.zip --name my-policy --player ply_... \
+  --attributes '{"language":"python"}' --tag purpose=experiment --json
+coworld submit my-policy:v4 --league league_... --player ply_... \
+  --notes 'Evaluate the revised opening' --no-open-browser --json
+```
+
+File uploads verify the exact player, name, bytes, attributes, and requested tags through readback. A repeated
+submission reuses the matching player, league, version, champion mode, preferences, and notes. Different existing
+submission options require inspection. An uncertain response does not trigger another creation. Use `--request-id` to
+preserve a managed operation's identity across an explicit retry. Private Experience Requests retain their body
+`idempotency_key`; keep that key when retrying the same request.
+
 ### How do I play a game locally?
 
 Use `uv run coworld play MANIFEST` for a browser session and `uv run coworld run-episode MANIFEST` for a headless
@@ -665,6 +698,21 @@ loop from the same data the strategist sees. Prompts and full prompts are owner-
 to any authenticated viewer of the league.
 
 ## Upload And Submit A Player
+
+Save an image policy's editable files with `--source`. Supply a ZIP or an explicitly selected source directory. The
+source stays private to the owner and authorized player credentials, including when the policy enters a public league.
+`--source-entry` identifies the configuration or entry file used by that image.
+
+```bash
+coworld upload-policy my-player:latest --name my-player --source ./policy-source --source-entry bot.py
+coworld attach-policy-source VERSION_UUID --source ./policy-source
+```
+
+The attach command adds source to an existing version. Identical retries retain the same attachment. A different archive
+cannot replace a recorded attachment.
+`coworld build-policy ./policy-source --source ./policy-source --output /tmp/player.tar` builds from a source snapshot,
+saves its ZIP beside the image archive, and prints an upload command for both. Use a selected build context without
+credentials or caches. Image-only uploads remain supported and report that source was omitted.
 
 For a workspace with BuildKit, build directly from the worktree and upload the resulting OCI image archive:
 
@@ -1310,8 +1358,8 @@ explicit confirmation, wait for hosted certification and upload smoke, then veri
 Audit existing repos from this checkout with:
 
 ```bash
-uv run coworld deploy-audit --owner Metta-AI
-uv run coworld deploy-audit --owner Metta-AI --fail-on-alert
+uv run coworld deploy-audit --owner softmax-universe
+uv run coworld deploy-audit --owner softmax-universe --fail-on-alert
 ```
 
 The audit reports each repo's default branch, Coworld name, active leagues, current canonical version, latest uploaded

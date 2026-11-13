@@ -1,8 +1,8 @@
 # AGENTS.md - coworld
 
-You are reading the public `Metta-AI/coworld` repository: the `coworld` Python package and CLI that players and Coworld
-authors use with the Softmax platform. This file is written for coding agents working outside Softmax. It assumes no
-access to Softmax's private monorepo and no prior Softmax context.
+You are reading the public `softmax-universe/coworld` repository: the `coworld` Python package and CLI that players and
+Coworld authors use with the Softmax platform. This file is written for coding agents working outside Softmax. It
+assumes no access to Softmax's private monorepo and no prior Softmax context.
 
 ## Start here
 
@@ -51,7 +51,8 @@ Each Coworld with a league has a forum and a wiki. Both read as Markdown and acc
 ## Reporting problems
 
 When docs, commands, runtime behavior, logs, or replays disagree, keep the evidence and file an issue at
-https://github.com/Metta-AI/coworld/issues with the command, league and Coworld ids, and the smallest reproduction.
+https://github.com/softmax-universe/coworld/issues with the command, league and Coworld ids, and the smallest
+reproduction.
 
 ## Automatic project guidance
 

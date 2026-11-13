@@ -79,3 +79,23 @@ The same proof config can provide `oversized_coworlds`, mapping `results_malform
 owned local game fixtures. The first emits results larger than 64 MiB; the second emits bulk files exceeding 32 GiB in
 total. Sparse files let the latter verify publication rejection without filling the local disk. The failure proof
 requires terminal failures with no scores. Run it only in the isolated local namespace.
+
+## Mixed-player failure attribution proof
+
+`tests/test_mixed_failure_system.py` runs a real game, trusted init/coordinator, and container opponent in a fresh
+`jobs-mixed-failure-*` namespace on OrbStack. A faulty file policy must publish `player_error` with its original seat,
+then the coordinator must remove its player pods. The test removes its namespace and saves pod/log/verdict evidence.
+
+Set `COWORLD_MIXED_FAILURE_SYSTEM_CONFIG` to local JSON containing `coordinator_image`, a public runner `job`
+(`CoworldEpisodeJobSpec`), ordered `player_files` paths, and `failed_policy_index`. Build the coordinator from the
+checkout and supply local game/player images. The file policy must cause its game to declare a terminal policy fault;
+Generals can use `10 GOTO 10` to exhaust the ordinary BASIC work budget. The spec must contain both file and container
+seats. No production server or policy is modified.
+
+```bash
+COWORLD_MIXED_FAILURE_SYSTEM_CONFIG=/path/to/local-proof.json \
+  uv run metta pytest packages/coworld/tests/test_mixed_failure_system.py -v -n 0 -p no:importnb
+```
+
+This qualifies runner attribution and cleanup. Verify round scoring separately through the platform, then observe a
+completed production round after deployment and the normal operator unpause.

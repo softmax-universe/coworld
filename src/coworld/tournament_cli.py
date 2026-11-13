@@ -42,12 +42,11 @@ from coworld.api_client import (
 from coworld.cli_support import console, emit_json, print_replay_session
 from coworld.config import DEFAULT_SUBMIT_SERVER, docs_epilog, participation_guide_url
 from coworld.episode_downloads import DownloadResult, download_episodes
-from coworld.episode_replays import materialized_episode_replay
 from coworld.episode_workflows import register_episode_workflows
 from coworld.feed_cli import print_feed_reminder
 from coworld.manifest import read_downloaded_manifest
+from coworld.manifest_uri import materialized_replay_path
 from coworld.play import ReplaySession, replay_coworld
-from coworld.submit import parse_policy_identifier
 from coworld.upload import download_coworld, downloaded_coworld_manifest_path, pull_and_tag_image
 from softmax_client import credentials as softmax_credentials
 
@@ -233,6 +232,9 @@ def register_tournament_commands(app: typer.Typer) -> None:
         ] = None,
         server: Annotated[str, typer.Option("--server", help="Observatory API server URL.")] = DEFAULT_SUBMIT_SERVER,
         json_output: Annotated[bool, typer.Option("--json", help="Print raw JSON.")] = False,
+        request_id: Annotated[
+            str | None, typer.Option("--request-id", help="Stable managed operation identifier.")
+        ] = None,
     ) -> None:
         raw = sys.stdin.read() if body == "-" else Path(body).read_text(encoding="utf-8")
         payload = json.loads(raw)
@@ -241,7 +243,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
         if description is not None:
             payload["description"] = description
         with CoworldApiClient.from_login(server_url=server) as client:
-            detail = client.create_experience_request(payload)
+            detail = client.create_experience_request(payload, request_id=request_id)
         if json_output:
             emit_json(detail.model_dump(mode="json"))
             return
@@ -537,6 +539,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
         ] = None,
         player_id: Annotated[str | None, typer.Option("--player", help="Filter by player ID.")] = None,
         mine: Annotated[bool, typer.Option("--mine", help="Show my submissions.")] = False,
+        game: Annotated[str | None, typer.Option("--game", help="Filter by exact game display name.")] = None,
         limit: Annotated[int | None, typer.Option("--limit", min=1, max=1000, help="Maximum rows to return.")] = None,
         cursor: Annotated[str | None, typer.Option("--cursor", help="Continue from a previous page token.")] = None,
         server: Annotated[str, typer.Option("--server", help="Observatory API server URL.")] = DEFAULT_SUBMIT_SERVER,
@@ -549,6 +552,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
                 player_id=player_id,
                 policy_version_id=policy_version_id,
                 mine=mine,
+                game_name=game,
                 limit=limit,
                 cursor=cursor,
             )
@@ -946,13 +950,7 @@ def register_tournament_commands(app: typer.Typer) -> None:
                 manifest_temp_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="coworld-replay-manifest-"))
                 replay_manifest_path = Path(manifest_temp_dir) / "coworld_manifest.json"
                 replay_manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-            replay_path = stack.enter_context(
-                materialized_episode_replay(
-                    client=client,
-                    episode_request_id=episode_request_id,
-                    replay_uri=episode.replay_url,
-                )
-            )
+            replay_path = stack.enter_context(materialized_replay_path(episode.replay_url))
             session = replay_coworld(
                 replay_manifest_path,
                 replay_path,
@@ -991,13 +989,7 @@ def _player_label(player: Any | None) -> str:
 def _resolve_policy_filter(client: CoworldApiClient, policy: str) -> UUID:
     if _UUID_RE.fullmatch(policy):
         return UUID(policy)
-    name, version = parse_policy_identifier(policy)
-    row = client.lookup_policy_version(name=name, version=version)
-    if row is None:
-        version_hint = f":v{version}" if version is not None else ""
-        console.print(f"[red]Policy '{name}{version_hint}' not found.[/red]")
-        raise typer.Exit(1)
-    return row.id
+    return client.resolve_policy_version(policy).id
 
 
 def _reporter_outputs_summary(outputs: list[Any]) -> str:
@@ -1483,9 +1475,7 @@ def _download_replays(
         assert row.replay_url is not None, "replay download rows must have replay_url"
         local_name = f"{row.id}.replay"
         local_path = output_dir / local_name
-        with materialized_episode_replay(
-            client=client, episode_request_id=row.id, replay_uri=row.replay_url
-        ) as replay_path:
+        with materialized_replay_path(row.replay_url) as replay_path:
             shutil.copyfile(replay_path, local_path)
         metadata.append(
             {

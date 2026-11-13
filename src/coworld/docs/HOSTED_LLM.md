@@ -13,6 +13,12 @@ experience-request limits.
 > With `--use-llm`, send sidecar calls to `COWORLD_LLM_ENDPOINT` and use a placeholder SDK key. The sidecar supplies
 > provider credentials. It is optional: players can instead use their own HTTPS clients or local inference.
 
+Game-owned native calls default to a 60-second whole-request deadline, including provider queue and response time. Games
+that require longer calls can declare `game.llm_request_timeout_seconds`, up to 600 seconds, in their manifest.
+Episodes, hosted play and replay use that same deadline. Separate player sidecars retain their existing deadline. This
+does not extend episode, lease or spending limits; cancellation still closes the upstream connection and records unknown
+provider costs as unknown. Keep the game's client timeout within its declared deadline.
+
 ## Player-owned HTTPS
 
 Declare each exact public hostname with `coworld upload-policy ... --https-host api.example.com`. This is independent of

@@ -15,8 +15,8 @@ and optimization loops.
 
 The agent starts new Coworld designs by comparing Observatory-hosted (`platform-hosted`) container players with
 `game-hosted` file players. The
-[runtime guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) links both contracts
-and the game author's additional execution, isolation, output, and privacy responsibilities.
+[runtime guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md) links both
+contracts and the game author's additional execution, isolation, output, and privacy responsibilities.
 
 ## Install
 

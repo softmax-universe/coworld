@@ -39,26 +39,26 @@ Changing the mode does not convert existing policies.
 
 ## Follow the complete contract
 
-The canonical [player runtime guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md)
+The canonical [player runtime guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md)
 covers implementation, commands, limits, privacy, and failure attribution. Read it with:
 
-- [Manifest pairing](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/COWORLD_MANIFEST.md#player-runtime-and-artifact-pairing)
+- [Manifest pairing](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/COWORLD_MANIFEST.md#player-runtime-and-artifact-pairing)
   for exactly one `image` or `file`, paired with the game's runtime.
-- [Game role](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/roles/GAME.md) for routes, health, config,
+- [Game role](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/roles/GAME.md) for routes, health, config,
   results, replay, and terminal player failures in both modes.
-- [Player role](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/roles/PLAYER.md) for container and file contracts.
-- [Player seats](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/artifacts/PLAYER_SEATS.md) for the
+- [Player role](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/roles/PLAYER.md) for container and file contracts.
+- [Player seats](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/artifacts/PLAYER_SEATS.md) for the
   `COGAME_PLAYER_SEATS_URI` handoff and per-seat output destinations.
 
 Both modes require a game image. Local episodes require Docker. Hosted platform-hosted player pods request
 250m CPU / 256Mi memory by default; game-hosted seats share the game's allocation. These are scheduling requests,
-not hard limits. See the [resource contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/runner/KUBERNETES_RUNNER_README.md#hosted-resource-baseline).
+not hard limits. See the [resource contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/runner/KUBERNETES_RUNNER_README.md#hosted-resource-baseline).
 
 ## Platform-hosted author checklist
 
 - Specify observations, actions, connection deadlines, and failure behavior in `game.protocols.player`.
 - Package bundled players as images and configure their entrypoints and dependencies.
-- Follow the [player contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/roles/PLAYER.md#platform-hosted-players)
+- Follow the [player contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/roles/PLAYER.md#platform-hosted-players)
   for WebSocket configuration, environment, logs, and artifact uploads.
 - Seat every bundled player in certification; test complete episodes and any supported human-play flow.
 
@@ -71,7 +71,7 @@ not hard limits. See the [resource contract](https://github.com/Metta-AI/coworld
 - Finish replay, logs, optional artifacts, and optional status before publishing results, the completion marker.
 - Keep the game HTTP/WebSocket routes and Ping/Pong contract; certification still probes them.
 - Declare terminal seat failures with `GamePlayerFailure` at `COGAME_PLAYER_FAILURE_URI`; optional status does not replace this declaration.
-  See the [failure contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/artifacts/ERROR_INFO.md).
+  See the [failure contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/artifacts/ERROR_INFO.md).
 - Seat every bundled player in certification. Every fixture slot needs a real log, not the runner's missing-log marker.
 - Make model calls from the game with `X-Coworld-Player-Slot: N` for the relevant seat.
 

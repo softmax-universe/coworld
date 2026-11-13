@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import shlex
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -29,6 +28,7 @@ from coworld.task_environment import (
     CreateTask,
     ExecuteTask,
     NetworkPhase,
+    TaskFileRequest,
     TaskHandle,
 )
 
@@ -67,7 +67,9 @@ class TaskControl:
         def execute(key: str, request: ExecuteTask) -> CommandResult:
             if key not in pods.handles:
                 raise HTTPException(status_code=404, detail="unknown_task")
-            return pods.execute(key, request.command, request.timeout_seconds, request.max_output_bytes)
+            return pods.execute(
+                key, request.command, request.timeout_seconds, request.max_output_bytes, user=request.user
+            )
 
         @self.app.post("/tasks/{key}/network")
         def network(key: str, request: NetworkPhase) -> CommandResult:
@@ -76,11 +78,9 @@ class TaskControl:
             return pods.set_network(key, request.mode)
 
         @self.app.put("/tasks/{key}/file")
-        async def upload(key: str, path: str, request: Request) -> CommandResult:
+        async def upload(key: str, query: Annotated[TaskFileRequest, Query()], request: Request) -> CommandResult:
             if key not in pods.handles:
                 raise HTTPException(status_code=404, detail="unknown_task")
-            if not path.startswith("/") or len(path) > 4096:
-                raise HTTPException(status_code=422, detail="absolute_path_required")
             with tempfile.TemporaryDirectory(prefix="coworld-upload-") as directory:
                 local = Path(directory) / "file"
                 size = 0
@@ -90,26 +90,23 @@ class TaskControl:
                         if size > MAX_FILE_BYTES:
                             raise HTTPException(status_code=413, detail="file_too_large")
                         output.write(chunk)
-                command = ["/bin/sh", "-c", f"head -c {size} > {shlex.quote(path)}"]
-                return await asyncio.to_thread(pods.execute, key, command, 300, 65536, input_path=local)
+                return await asyncio.to_thread(pods.upload_file, key, query.path, local, user=query.user)
 
         @self.app.get("/tasks/{key}/file")
-        async def download(key: str, path: str):
+        async def download(key: str, query: Annotated[TaskFileRequest, Query()]):
             if key not in pods.handles:
                 raise HTTPException(status_code=404, detail="unknown_task")
-            if not path.startswith("/") or len(path) > 4096:
-                raise HTTPException(status_code=422, detail="absolute_path_required")
             directory = tempfile.TemporaryDirectory(prefix="coworld-download-")
             local = Path(directory.name) / "file"
             delivered = False
             try:
                 result = await asyncio.to_thread(
-                    pods.execute,
+                    pods.download_file,
                     key,
-                    ["/bin/sh", "-c", f"cat -- {shlex.quote(path)}"],
-                    300,
+                    query.path,
+                    local,
                     MAX_FILE_BYTES,
-                    output_path=local,
+                    user=query.user,
                 )
                 if result.kind != "completed" or result.exit_code != 0:
                     return JSONResponse(status_code=409, content=result.model_dump())

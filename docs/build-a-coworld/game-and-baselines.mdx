@@ -9,8 +9,8 @@ starting the game, which loads and executes them.
 Choose [the runtime](/docs/coworld/build-a-coworld/player-runtimes) before implementing either path.
 
 The game and player protocols are exact runtime contracts. Use this page for the implementation shape, then verify the
-details against the [game contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/roles/GAME.md) and
-[player contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/roles/PLAYER.md).
+details against the [game contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/roles/GAME.md) and
+[player contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/roles/PLAYER.md).
 
 ## Implement the game as the authority
 
@@ -76,7 +76,7 @@ URI and serves the replay client and stream.
 The replay URI may be an HTTPS URL during hosted use. Do not assume it is a local file.
 
 You may instead declare a static browser replay bundle. Follow the
-[static replay viewer contract](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/STATIC_REPLAY_VIEWERS.md)
+[static replay viewer contract](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/STATIC_REPLAY_VIEWERS.md)
 for its build hook, manifest entry, and browser checks.
 
 In either mode, make the default replay start automatically and restart from the beginning after it ends.
@@ -96,7 +96,7 @@ Always include a scripted player that:
 This player is the certification baseline and the floor that submitted policies should beat.
 
 If the game targets LLM players, you may also ship an LLM baseline. Keep the scripted fallback inside it. Read the
-[hosted LLM runtime guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/HOSTED_LLM.md) before implementing
+[hosted LLM runtime guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/HOSTED_LLM.md) before implementing
 a model call.
 
 <Callout type="warning">
@@ -120,7 +120,7 @@ manifest. Separate images are also valid when the implementations need different
 
 The game reads `COGAME_PLAYER_SEATS_URI`, loads the verified bytes at each seat's `file_uri`, and executes the
 specified player interface. The game owns isolation, execution budgets, and per-seat output separation.
-Implement the [game-hosted checklist](/docs/coworld/build-a-coworld/player-runtimes.mdx#game-hosted-author-checklist) and link the file-format
+Implement the [game-hosted checklist](/docs/coworld/build-a-coworld/player-runtimes#game-hosted-author-checklist) and link the file-format
 contract from `game.protocols.player`. File players need no player image or Compose service.
 
 The HTTP/WebSocket game contract still applies. Game-hosted mode currently rejects `coworld play` and hosted human
@@ -137,7 +137,7 @@ protocol implementation work.
 
 ## Use Paint Arena as a concrete example
 
-[Paint Arena](https://github.com/Metta-AI/coworld/tree/main/src/coworld/examples/paintarena) keeps the complete surface
+[Paint Arena](https://github.com/softmax-universe/coworld/tree/main/src/coworld/examples/paintarena) keeps the complete surface
 in one project:
 
 - `game/server.py` owns the rules, routes, results, and replay;

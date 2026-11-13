@@ -474,10 +474,10 @@ configured default.
 Coworld runtime ownership and role implementation ownership are separate:
 
 - Metta/Coworld owns the manifest schema, runtime env vars, runner behavior, upload flow, and CLI.
-- [`Metta-AI/coworld-tools`](https://github.com/Metta-AI/coworld-tools) owns imported shared implementations from the
-  archived `players`, `commissioners`, `reporters`, `graders`, `diagnosers`, and `games` repositories. Treat it as the
-  source library for reusable pieces and for starting a game-local copy.
-- A `Metta-AI/coworld-<slug>` game repo owns game-local runnables that should move with that game.
+- [`softmax-universe/coworld-tools`](https://github.com/softmax-universe/coworld-tools) owns imported shared
+  implementations from the archived `players`, `commissioners`, `reporters`, `graders`, `diagnosers`, and `games`
+  repositories. Treat it as the source library for reusable pieces and for starting a game-local copy.
+- A `softmax-universe/coworld-<slug>` game repo owns game-local runnables that should move with that game.
 - An optimizer workbench belongs in a repository accessible to the people expected to run it.
 
 At episode or round runtime, the runner does not clone those repositories. It executes the image, command, and env

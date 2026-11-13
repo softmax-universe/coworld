@@ -42,6 +42,8 @@ class CreateTask(BaseModel):
 class ExecuteTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    user: str | None = Field(default=None, min_length=1, max_length=64)
+
     command: list[Annotated[str, Field(max_length=65536)]] = Field(min_length=1, max_length=64)
     timeout_seconds: float = Field(
         gt=0, le=86400, allow_inf_nan=False, description="Command execution budget after the task pod is running."
@@ -52,6 +54,13 @@ class ExecuteTask(BaseModel):
 class NetworkPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["public", "no-network"]
+
+
+class TaskFileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096, pattern=r"^/")
+    user: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class ClosedTask(BaseModel):
@@ -97,7 +106,7 @@ class TaskEnvironmentClient:
         response.raise_for_status()
         return CommandResult.model_validate_json(response.content)
 
-    def upload(self, task: TaskHandle, source: Path, destination: str) -> CommandResult:
+    def upload(self, task: TaskHandle, source: Path, destination: str, *, user: str | None = None) -> CommandResult:
         if source.stat().st_size > MAX_FILE_BYTES:
             raise ValueError("Task file exceeds 200 MiB")
 
@@ -111,13 +120,19 @@ class TaskEnvironmentClient:
                     yield chunk
 
         response = self.http.put(
-            f"/tasks/{quote(task.key, safe='')}/file", params={"path": destination}, content=chunks()
+            f"/tasks/{quote(task.key, safe='')}/file",
+            params=TaskFileRequest(path=destination, user=user).model_dump(exclude_none=True),
+            content=chunks(),
         )
         response.raise_for_status()
         return CommandResult.model_validate_json(response.content)
 
-    def download(self, task: TaskHandle, source: str, destination: Path) -> None:
-        with self.http.stream("GET", f"/tasks/{quote(task.key, safe='')}/file", params={"path": source}) as response:
+    def download(self, task: TaskHandle, source: str, destination: Path, *, user: str | None = None) -> None:
+        with self.http.stream(
+            "GET",
+            f"/tasks/{quote(task.key, safe='')}/file",
+            params=TaskFileRequest(path=source, user=user).model_dump(exclude_none=True),
+        ) as response:
             response.raise_for_status()
             with destination.open("xb") as output:
                 size = 0

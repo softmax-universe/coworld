@@ -11,10 +11,10 @@ post-hoc analysis. The runner hands each player an upload destination; the playe
 ## Select the artifact path by runtime
 
 Check `game.player_runtime`; see the
-[runtime guide](https://github.com/Metta-AI/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md). For `game-hosted`
-players, the game writes a non-empty zip to the seat's `artifact_uri` from `COGAME_PLAYER_SEATS_URI` before publishing
-results. It receives no player upload URL. Hosted collection skips files above 200 MiB. The environment, upload steps,
-and examples below apply to `platform-hosted` container players.
+[runtime guide](https://github.com/softmax-universe/coworld/blob/main/src/coworld/docs/PLAYER_RUNTIMES.md). For
+`game-hosted` players, the game writes a non-empty zip to the seat's `artifact_uri` from `COGAME_PLAYER_SEATS_URI`
+before publishing results. It receives no player upload URL. Hosted collection skips files above 200 MiB. The
+environment, upload steps, and examples below apply to `platform-hosted` container players.
 
 ## Contract
 

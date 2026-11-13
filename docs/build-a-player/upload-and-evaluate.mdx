@@ -71,7 +71,7 @@ uv run coworld upload-policy --file ./my-player --name my-player
 
 Files and packed directories are capped at 100 MiB, for bundled and submitted players alike.
 The outer artifact is staged as `file`, regardless of its original name or extension. Follow the game's entrypoint
-convention; see [packaging and verification](/docs/coworld/build-a-player/package-and-verify.mdx#game-hosted-files).
+convention; see [packaging and verification](/docs/coworld/build-a-player/package-and-verify#game-hosted-files).
 Record the returned `NAME:vN`, then [request hosted experience](#request-hosted-experience) as for image policies.
 File uploads reject `--run`, `--secret-env`, `--use-llm`, and `--llm-model`. Files are not distributed through
 Coworld downloads, but the game process can read or copy them. Upload sensitive source only if you accept that access.

@@ -47,6 +47,9 @@ A successful command returns `kind: completed`, stdout, stderr, and its exit cod
 result. Infrastructure failures have distinct kinds and close the environment. Command output is limited to 1 MiB; files
 are streamed with a 200 MiB limit. Paths must be absolute. JSON bodies are limited to 64 KiB.
 
+File transfers verify byte counts and SHA-256 hashes before acknowledging completion. Task images provide `/bin/sh`,
+`head`, `cat`, `wc`, and `sha256sum` for this protocol. The sender stays open until the receiver confirms complete data.
+
 Creation is idempotent for a key and definition. A closed key stays closed. Fresh verification uses a new key; it never
 reuses the agent's filesystem. Startup and command budgets are separate and both stop at the episode deadline.
 
@@ -73,3 +76,27 @@ network transitions, filesystem transfers, and grading semantics before activati
 benchmark panels, declare the complete creation budget and close each sandbox before creating the next. A rejected
 create with `concurrency_budget_exhausted` creates no instance; retry creation after the previous pod is removed. Closed
 task keys remain closed, and uncertain commands must never be repeated as fresh scoring executions.
+
+## Declared command users
+
+General tasks can declare separate identities for privileged setup and ordinary commands:
+
+```json
+"command_users": {
+  "default": "native",
+  "identities": {
+    "native": {"uid": 65534, "gid": 65534, "home": "/home/native"},
+    "root": {"uid": 0, "gid": 0, "home": "/root"}
+  }
+}
+```
+
+Pin UID, GID, `home`, and optional `supplementary_gids` to native execution in the task image. Preserve an explicit
+image `HOME` even when multiple users share it. Commands and file transfers use `default`. Execution requests can select
+another declared alias with `"user": "root"`; file uploads and downloads use the `user=root` query parameter.
+`TaskEnvironmentClient.upload` and `download` accept the same keyword argument. Undeclared aliases return
+`undeclared_command_user`.
+
+The trusted supervisor starts as root, sets the selected identity and HOME, and disables privilege escalation before
+executing commands. Declaring root permits privileged setup inside the sandbox. Coding isolation rejects these
+declarations. Omission retains the image user. Deploy a supporting coordinator before using this field.

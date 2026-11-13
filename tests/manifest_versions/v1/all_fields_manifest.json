@@ -122,9 +122,27 @@
         "max_instances": 2,
         "network": "public",
         "network_transitions": ["no-network", "public"],
-        "max_concurrent_instances": 2
+        "max_concurrent_instances": 2,
+        "command_users": {
+          "default": "native",
+          "identities": {
+            "native": {
+              "uid": 65534,
+              "gid": 65534,
+              "home": "/home/native",
+              "supplementary_gids": [100, 200]
+            },
+            "root": {
+              "uid": 0,
+              "gid": 0,
+              "home": "/root",
+              "supplementary_gids": [0]
+            }
+          }
+        }
       }
-    }
+    },
+    "llm_request_timeout_seconds": 570.0
   },
   "player": [
     {

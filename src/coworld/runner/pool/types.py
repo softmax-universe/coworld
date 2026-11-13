@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from coworld.runner.player_artifacts import ArtifactUploadTargets
+from coworld.runner.resource_quantity import parse_resource_quantity
 from coworld.types import CoworldEpisodeJobSpec
 
 
@@ -34,17 +35,34 @@ class ExecutionProfile(BaseModel):
 
     runtime_version: Literal[1] = 1
     execution_mode: Literal["reuse"] = "reuse"
-    player_runtime: Literal["game-hosted"] = "game-hosted"
+    player_runtime: Literal["game-hosted", "platform-hosted"] = "game-hosted"
     image: ImageLaunchMetadata
     command: tuple[str, ...] = Field(min_length=1)
     episode_timeout_seconds: int = Field(gt=0)
     resources: PoolResources
+    player_resources: tuple[PoolResources, ...] = ()
     # Profiles are explicitly qualified. Sidecars with episode state require their own reset protocol.
     sidecar_policy: Literal["none"] = "none"
-    network_policy: Literal["local-development", "restricted-egress-no-inference"] = "local-development"
+    network_policy: Literal[
+        "local-development", "restricted-egress-no-inference", "restricted-egress-container-players"
+    ] = "local-development"
+
+    @property
+    def reserved_cpu(self) -> float:
+        return 0.25 + sum(float(parse_resource_quantity(r.cpu)) for r in (self.resources, *self.player_resources))
+
+    @property
+    def reserved_memory_bytes(self) -> int:
+        return 256 * 1024**2 + sum(
+            int(parse_resource_quantity(r.memory)) for r in (self.resources, *self.player_resources)
+        )
 
     def content_hash(self) -> str:
-        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        document = self.model_dump(mode="json")
+        # Preserve identities of already-stored file-only profiles.
+        if not self.player_resources:
+            del document["player_resources"]
+        canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
 

@@ -1,5 +1,6 @@
 """Reusable assignment owner; episode subprocesses retain the existing runner contract."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -11,10 +12,13 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
+from kubernetes import client as kubernetes_client
+from kubernetes import config as kubernetes_config
 from pydantic import BaseModel, Field, TypeAdapter
 from tenacity import retry, retry_if_exception_type, stop_after_delay, wait_exponential
 
 from coworld.runner.io import RunnerError, upload_data
+from coworld.runner.kubernetes_runner import delete_child_resources
 from coworld.runner.player_artifacts import ARTIFACT_TARGETS_PATH
 from coworld.runner.pool.control import CONTROL_DIR, GAME_UID, control
 from coworld.runner.pool.types import ExecutionProfile, PoolArtifactTargets, PreparedPoolEpisode
@@ -176,6 +180,47 @@ def run_assignment(client: PoolClient, assignment: Assignment, profile: Executio
         "XP_POOL_CACHE_DIR": os.environ["XP_POOL_CACHE_DIR"],
         "XP_POOL_CACHE_MAX_BYTES": os.environ["XP_POOL_CACHE_MAX_BYTES"],
     }
+    if prepared.spec.has_player_containers:
+        env.update(
+            {
+                name: os.environ[name]
+                for name in (
+                    "JOB_NAME",
+                    "JOB_NAMESPACE",
+                    "POD_NAME",
+                    "POD_IP",
+                    "POD_UID",
+                    "JOB_UID",
+                    "COWORLD_COORDINATOR_IMAGE",
+                    "COWORLD_PLAYER_MEMORY_LIMIT",
+                )
+            }
+        )
+        env.update(
+            {
+                name: value
+                for name, value in os.environ.items()
+                if name
+                in {
+                    "COWORLD_LOCAL_DEV",
+                    "COWORLD_PLAYER_IMAGE_PULL_POLICY",
+                    "COWORLD_WORKLOAD_TYPE",
+                    "COWORLD_CAPACITY_TYPE",
+                    "COWORLD_EGRESS_ENFORCEMENT_ENABLED",
+                    "COWORLD_PLAYER_EGRESS_RELAY_URL",
+                    "COWORLD_EGRESS_RELAY_IP",
+                    "KUBERNETES_SERVICE_HOST",
+                    "KUBERNETES_SERVICE_PORT",
+                }
+            }
+        )
+        env.update(
+            {
+                "JOB_ID": str(assignment.job_id),
+                "COWORLD_SERVICE_NAME": "xpp-" + assignment.attempt_id.hex[:24],
+                "COWORLD_GAME_POD_SELECTOR": json.dumps({"xp-pool-worker": os.environ["XP_POOL_WORKER_ID"]}),
+            }
+        )
     # Initialization writes fixed paths before untrusted code can create files or links.
     _clear_directory(WORKDIR)
     _clear_directory(TMPDIR)
@@ -188,6 +233,21 @@ def run_assignment(client: PoolClient, assignment: Assignment, profile: Executio
         )
         if not active:
             return
+        env["JOB_SPEC_URI"] = (PRIVATE / "job_spec.json").as_uri()
+        if child.returncode == 0 and prepared.spec.has_player_containers:
+            child = subprocess.Popen(
+                [sys.executable, "-m", "coworld.runner.kubernetes_runner", "prepare-players"], env=env
+            )
+            active = _wait_child(
+                child,
+                client,
+                assignment,
+                running_at=None,
+                deadline=time.monotonic() + prepared.timeout_seconds,
+                targets=targets,
+            )
+            if not active:
+                return
         if child.returncode == 0:
             for path in (WORKDIR, *WORKDIR.rglob("*"), TMPDIR, SHMDIR):
                 os.chown(path, GAME_UID, GAME_UID, follow_symlinks=False)
@@ -255,6 +315,23 @@ def run_assignment(client: PoolClient, assignment: Assignment, profile: Executio
         if child.poll() is None:
             child.kill()
             child.wait(timeout=10)
+        if prepared.spec.has_player_containers:
+            # Completion must not release the worker while a player can reach its next game.
+            # Delete by assignment identity even when player preparation was interrupted.
+            kubernetes_config.load_incluster_config()
+            with kubernetes_client.ApiClient() as api:
+                core = kubernetes_client.CoreV1Api(api)
+                namespace = env["JOB_NAMESPACE"]
+                selector = "job-id=" + str(assignment.job_id)
+                children = core.list_namespaced_pod(namespace, label_selector=selector).items
+                delete_child_resources(
+                    core, namespace, env["COWORLD_SERVICE_NAME"], [pod.metadata.name for pod in children]
+                )
+                deadline = time.monotonic() + 90
+                while core.list_namespaced_pod(namespace, label_selector=selector).items:
+                    assert time.monotonic() < deadline, "Player termination was not confirmed"
+                    control("", 0)
+                    time.sleep(0.5)
         if launched:
             status = control(key, 3)
             assert status.state == 3, "Game cleanup was not confirmed"
@@ -280,6 +357,8 @@ def main() -> None:
     profile = ExecutionProfile.model_validate_json(Path(os.environ["XP_POOL_PROFILE_PATH"]).read_bytes())
     client = PoolClient(os.environ["XP_POOL_API_URL"], Path(os.environ["XP_POOL_TOKEN_PATH"]).read_text().strip())
     max_age_seconds = int(os.environ["XP_POOL_MAX_AGE_SECONDS"])
+    max_episodes = int(os.environ["XP_POOL_MAX_EPISODES"])
+    idle_retire_seconds = int(os.environ["XP_POOL_IDLE_RETIRE_SECONDS"])
     started = time.monotonic()
     episodes = 0
     last_assignment = started
@@ -290,9 +369,11 @@ def main() -> None:
             time.sleep(0.1)
         # A restarted coordinator cannot prove publication/cleanup of an earlier process.
         assert control("", 0).state == 0, "Supervisor has prior execution state; retire for recovery"
-        # Retire unused capacity while keeping preparation independent of supervisor idle expiry.
+        # The controller retires idle capacity; this deadline only bounds a worker whose controller is down.
         while (
-            episodes < 50 and time.monotonic() - started < max_age_seconds and time.monotonic() - last_assignment < 540
+            episodes < max_episodes
+            and time.monotonic() - started < max_age_seconds
+            and time.monotonic() - last_assignment < idle_retire_seconds
         ):
             control("", 0)
             response = CLAIM_RESPONSE.validate_json(client.post("claim", {}).content)

@@ -248,28 +248,8 @@ secret_app = typer.Typer(no_args_is_help=True, help="Manage hosted Coworld secre
 app.add_typer(secret_app, name="secret")
 
 
-def _parse_policy_ref(ref: str) -> tuple[str, int] | str:
-    """Return (name, version) for name:vN / name@N, else the raw UUID/string."""
-    if ":v" in ref:
-        name, _, version_text = ref.rpartition(":v")
-        if name and version_text.isdigit():
-            return name, int(version_text)
-    if "@" in ref and not ref.startswith("@"):
-        name, _, version_text = ref.rpartition("@")
-        if name and version_text.isdigit():
-            return name, int(version_text)
-    return ref
-
-
 def _resolve_policy_version_id(client: CoworldApiClient, ref: str) -> str:
-    parsed = _parse_policy_ref(ref)
-    if isinstance(parsed, str):
-        return parsed
-    name, version = parsed
-    row = client.lookup_policy_version(name=name, version=version)
-    if row is None:
-        raise typer.BadParameter(f"policy version not found (mine): {name}:v{version}")
-    return str(row.id)
+    return str(client.resolve_policy_version(ref).id)
 
 
 @counterfactual_app.command("create")
@@ -466,7 +446,7 @@ def lobby_seat(
         current = client.get_lobby(lobby_id)
         lobby = client.update_lobby_seat(
             lobby_id,
-            int(seat["position"]),
+            cast(int, seat["position"]),
             expected_revision=current.revision if revision is None else revision,
             kind=str(seat["kind"]),
             player_id=str(seat["player_id"]) if "player_id" in seat else None,
@@ -1582,6 +1562,12 @@ def upload_policy(
             ),
         ),
     ] = None,
+    player: Annotated[str | None, typer.Option("--player", help="Owned player ID for a file policy.")] = None,
+    attributes: Annotated[
+        str | None, typer.Option("--attributes", help="File policy attributes as a JSON object.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print only the upload receipt as JSON.")] = False,
+    request_id: Annotated[str | None, typer.Option("--request-id", help="Stable managed operation identifier.")] = None,
     run: Annotated[
         list[str] | None,
         typer.Option("--run", help="Command argv for images that contain multiple Coworld roles."),
@@ -1748,12 +1734,15 @@ def upload_policy(
     if description is not None:
         parsed_tags["description"] = description
 
+    parsed_attributes = json.loads(attributes) if attributes is not None else None
+    if parsed_attributes is not None and not isinstance(parsed_attributes, dict):
+        raise typer.BadParameter("--attributes must be a JSON object")
     validate_run_argv(run)
-    update_agent_guidance(Path.cwd())
-    if name is not None:
-        typer.echo(f"Policy name: {name}")
-    # Before the upload, so a failed flag read cannot fail an upload that went through.
-    print_feed_hello_pointer(server=server)
+    if not json_output:
+        update_agent_guidance(Path.cwd())
+        if name is not None:
+            typer.echo(f"Policy name: {name}")
+        print_feed_hello_pointer(server=server)
 
     upload_policy_cmd(
         image_archive if image_archive is not None else image,
@@ -1765,8 +1754,13 @@ def upload_policy(
         secret_env=parsed_secret_env if parsed_secret_env else None,
         tags=parsed_tags if parsed_tags else None,
         server=server,
-        **({"player_file": player_file} if player_file is not None else {}),
-        **({"source": source, "source_entry_paths": source_entry} if source is not None else {}),
+        player_id=player,
+        attributes=parsed_attributes,
+        json_output=json_output,
+        request_id=request_id,
+        player_file=player_file,
+        source=source,
+        source_entry_paths=source_entry,
     )
 
 
@@ -1776,7 +1770,7 @@ def upload_policy(
     epilog=docs_epilog("submit-to-a-league"),
 )
 def submit(
-    policy: Annotated[str, typer.Argument(help="Policy name, optionally with version suffix NAME:vN.")],
+    policy: Annotated[str, typer.Argument(help="Exact policy name, NAME:vN, or policy version UUID.")],
     league: Annotated[
         str,
         typer.Option(
@@ -1800,6 +1794,9 @@ def submit(
             ),
         ),
     ] = None,
+    notes: Annotated[str | None, typer.Option("--notes", help="Note attached to this submission.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print only the submission receipt as JSON.")] = False,
+    request_id: Annotated[str | None, typer.Option("--request-id", help="Stable managed operation identifier.")] = None,
     auto_champion: Annotated[
         AutoChampion,
         typer.Option(
@@ -1820,10 +1817,13 @@ def submit(
         policy,
         league_id=league,
         server=server,
-        open_browser=open_browser,
+        open_browser=open_browser and not json_output,
         auto_champion=auto_champion,
         preferences=preferences,
         player_id=player,
+        notes=notes,
+        json_output=json_output,
+        request_id=request_id,
     )
 
 

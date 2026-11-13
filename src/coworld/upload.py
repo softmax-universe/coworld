@@ -52,7 +52,6 @@ from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
 from coworld.types import MANIFEST_ROLE_SECTIONS, CoworldPlayerStartup, CoworldRunnableResources
 from softmax.docs import DOCS_AGENT_INDEX_URL, DOCS_AGENT_SKILL_URL
-from softmax_client import credentials as softmax_credentials
 
 _LOCAL_TAG_SEPARATOR_RE = re.compile(r"[^a-z0-9._-]+")
 _IMAGE_ID_RE = re.compile(r"^img_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -182,6 +181,11 @@ class PolicyVersionResponse(BaseModel):
     version: int
     pools: list[str] | None = None
     submit_error: str | None = None
+    player_id: str | None = None
+
+
+class FilePolicyVersionResponse(PolicyVersionResponse):
+    player_id: str
 
 
 class CoworldPlayerFileUploadResponse(BaseModel):
@@ -973,10 +977,14 @@ class CoworldUploadClient(PolicySourceClient):
             timeout=120.0,
         )
 
-    def lookup_policy_upload(self, inputs: dict[str, Any]) -> PolicyVersionResponse | None:
-        response = self._http_client.post(
+    def lookup_policy_upload(
+        self, inputs: dict[str, Any], *, request_id: str | None = None
+    ) -> PolicyVersionResponse | None:
+        headers = {"X-Cogent-Request-Id": request_id} if request_id is not None else {}
+        response = self._response(
+            "POST",
             "/stats/policies/lookup",
-            headers=self._headers(),
+            headers=headers,
             json=inputs,
             timeout=30.0,
         )
@@ -1719,7 +1727,9 @@ def upload_policy_cmd(
             }
             result = None
             if name is not None and player_id is not None:
-                result = client.lookup_policy_upload({"name": name, "player_id": player_id, **identity})
+                result = client.lookup_policy_upload(
+                    {"name": name, "player_id": player_id, **identity}, request_id=request_id
+                )
                 reconciled = result is not None
             if result is None:
                 result = client.upload_player_file_policy(
@@ -1730,11 +1740,9 @@ def upload_policy_cmd(
                     tags=tags or {},
                     request_id=request_id,
                 )
-            uploaded_version = client.resolve_policy_version(result.id, player_id=player_id)
-            if uploaded_version.player_id is None:
-                raise RuntimeError("Published file policy has no attributed player")
+            published_player_id = FilePolicyVersionResponse.model_validate(result.model_dump()).player_id
             confirmed = client.lookup_policy_upload(
-                {"name": result.name, "player_id": uploaded_version.player_id, **identity}
+                {"name": result.name, "player_id": published_player_id, **identity}, request_id=request_id
             )
             if confirmed is None or confirmed.id != result.id:
                 raise RuntimeError("Published file policy readback did not confirm the original upload inputs")
@@ -1764,7 +1772,7 @@ def upload_policy_cmd(
             receipt.update(
                 content_hash=content_hash,
                 size_bytes=len(contents),
-                player_id=uploaded_version.player_id,
+                player_id=published_player_id,
                 attributes=attributes or {},
                 tags=tags or {},
             )
@@ -1833,7 +1841,7 @@ def download_coworld(
 ) -> CoworldUploadResponse:
     coworld_id = resolve_coworld_download_id(coworld_ref, server=server)
 
-    with CoworldUploadClient(server_url=server, token=softmax_credentials.load_current_token(server=server)) as client:
+    with CoworldUploadClient(server_url=server) as client:
         coworld = client.get_coworld(coworld_id)
     manifest_bytes = json.dumps(coworld.manifest, sort_keys=True, separators=(",", ":")).encode()
     if len(manifest_bytes) != coworld.size_bytes:
@@ -1851,7 +1859,7 @@ def resolve_coworld_download_id(
     if coworld_ref.startswith("cow_"):
         return coworld_ref
 
-    with CoworldUploadClient.from_login(server_url=server) as client:
+    with CoworldUploadClient(server_url=server) as client:
         coworld = client.find_canonical_coworld(coworld_ref)
     if coworld is None:
         raise RuntimeError(f"Canonical Coworld not found: {coworld_ref}")
@@ -1891,7 +1899,7 @@ def _download_coworld_player_files(
     manifest = copy.deepcopy(coworld.manifest)
     files_dir = downloaded_coworld_player_files_path(output_dir, coworld.id)
     downloaded: dict[str, str] = {}
-    with CoworldApiClient(server_url=server, token=softmax_credentials.load_current_token(server=server)) as client:
+    with CoworldApiClient(server_url=server) as client:
         for player in manifest.get("player") or []:
             reference = player.get("file")
             if reference is None:

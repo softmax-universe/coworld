@@ -109,7 +109,9 @@ def test_file_policy_pull_preserves_edits_and_exact_version(tmp_path: Path) -> N
     receipt = json.loads(first.stdout)
     repeated = subprocess.run(upload, check=True, capture_output=True, text=True, timeout=120)
     assert json.loads(repeated.stdout)["id"] == receipt["id"]
-    working = tmp_path / "working"
+    parent_alias = tmp_path / "parent-alias"
+    parent_alias.symlink_to(tmp_path, target_is_directory=True)
+    working = parent_alias / "working"
     pull = [*command, "pull-policy", f"{name}:v1", "--output-dir", str(working), "--json", "--server", server]
     result = subprocess.run(pull, check=True, capture_output=True, text=True, timeout=120)
     assert json.loads(result.stdout)["policy_version_id"] == receipt["id"]
@@ -118,6 +120,20 @@ def test_file_policy_pull_preserves_edits_and_exact_version(tmp_path: Path) -> N
     edited.write_text("local edit\n")
     reopened = subprocess.run(pull, check=True, capture_output=True, text=True, timeout=120)
     assert json.loads(reopened.stdout)["state"] == "already_open"
+    assert edited.read_text() == "local edit\n"
+    destination_link = tmp_path / "destination-link"
+    destination_link.symlink_to(working, target_is_directory=True)
+    linked_pull = [
+        *command,
+        "pull-policy",
+        receipt["id"],
+        "--output-dir",
+        str(destination_link),
+        "--json",
+        "--server",
+        server,
+    ]
+    assert subprocess.run(linked_pull, capture_output=True, text=True, timeout=120).returncode != 0
     assert edited.read_text() == "local edit\n"
     original = tmp_path / "original"
     clean = [*command, "pull-policy", receipt["id"], "--output-dir", str(original), "--json", "--server", server]

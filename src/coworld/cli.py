@@ -249,18 +249,18 @@ app.add_typer(secret_app, name="secret")
 
 
 def _resolve_policy_version_id(client: CoworldApiClient, ref: str) -> str:
-    return str(client.resolve_policy_version(ref).id)
+    return str(client.resolve_policy_version(ref, mine=False, allow_at_version=True).id)
 
 
 @counterfactual_app.command("create")
 def counterfactual_create(
     candidate: Annotated[
         str,
-        typer.Argument(help="Candidate policy: name:vN (e.g. ctf-autoresearch:v47) or policy_version UUID."),
+        typer.Argument(help="Candidate policy: name:vN, name@N, or visible policy version UUID."),
     ],
     baseline: Annotated[
         str,
-        typer.Argument(help="Baseline policy: name:vN or policy_version UUID."),
+        typer.Argument(help="Baseline policy: name:vN, name@N, or visible policy version UUID."),
     ],
     league: Annotated[
         str,

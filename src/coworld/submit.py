@@ -3,37 +3,13 @@ from __future__ import annotations
 import webbrowser
 from pathlib import Path
 from typing import Any
-
-import typer
+from uuid import uuid4
 
 from coworld.agent_guidance import update_agent_guidance
-from coworld.api_client import AutoChampion, CoworldApiClient, PolicyVersionRow
-from coworld.cli_support import console, observatory_web_url
+from coworld.api_client import AutoChampion, CoworldApiClient
+from coworld.cli_support import console, emit_json, observatory_web_url
 from coworld.config import DEFAULT_SUBMIT_SERVER, DOCS_PAGES
 from coworld.feed_cli import print_feed_reminder
-
-
-def parse_policy_identifier(identifier: str) -> tuple[str, int | None]:
-    if ":" not in identifier:
-        return identifier, None
-    name, version_str = identifier.rsplit(":", 1)
-    version_str = version_str.removeprefix("v")
-    if not name or not version_str.isdecimal():
-        raise typer.BadParameter(f"Invalid policy version: {identifier}")
-    version = int(version_str)
-    if version <= 0:
-        raise typer.BadParameter(f"Invalid policy version: {identifier}")
-    return name, version
-
-
-def _resolve_policy_version(client: CoworldApiClient, name: str, version: int | None) -> PolicyVersionRow:
-    policy_version = client.lookup_policy_version(name=name, version=version)
-    if policy_version is None:
-        version_hint = f":v{version}" if version is not None else ""
-        console.print(f"[red]Policy '{name}{version_hint}' not found.[/red]")
-        console.print("[dim]Upload a Coworld policy first with: uv run coworld upload-policy IMAGE[/dim]")
-        raise typer.Exit(1)
-    return policy_version
 
 
 def submit_policy_to_league_cmd(
@@ -45,25 +21,66 @@ def submit_policy_to_league_cmd(
     auto_champion: AutoChampion = AutoChampion.always,
     preferences: dict[str, Any] | None = None,
     player_id: str | None = None,
+    notes: str | None = None,
+    json_output: bool = False,
+    request_id: str | None = None,
 ) -> None:
-    name, version = parse_policy_identifier(policy_identifier)
-    update_agent_guidance(Path.cwd())
+    request_id = request_id or str(uuid4())
+    if not json_output:
+        update_agent_guidance(Path.cwd())
     with CoworldApiClient.from_login(server_url=server) as client:
-        policy_version = _resolve_policy_version(client, name, version)
-        # Before the submission, so a failed feed check cannot fail a submission that went through.
-        coworld_name = client.get_league(league_id).game.coworld_name
-        if coworld_name is not None:
-            print_feed_reminder(server=server, coworld_name=coworld_name)
-
-        version_label = f":v{policy_version.version}"
-        console.print(f"[bold]Submitting {policy_version.name}{version_label} to league {league_id}[/bold]")
-        submission = client.submit_to_league(
-            league_id,
-            policy_version.id,
-            auto_champion=auto_champion,
-            preferences=preferences,
-            player_id=player_id,
-        )
+        policy_version = client.resolve_policy_version(policy_identifier, player_id=player_id)
+        if not json_output:
+            coworld_name = client.get_league(league_id).game.coworld_name
+            if coworld_name is not None:
+                print_feed_reminder(server=server, coworld_name=coworld_name)
+            console.print(
+                f"[bold]Submitting {policy_version.name}:v{policy_version.version} to league {league_id}[/bold]"
+            )
+        existing = []
+        cursor = None
+        while True:
+            page = client.list_submissions(
+                league_id=league_id,
+                player_id=player_id,
+                policy_version_id=policy_version.id,
+                mine=True,
+                limit=200,
+                cursor=cursor,
+                request_id=request_id,
+            )
+            existing.extend(page.entries)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        matches = [
+            row
+            for row in existing
+            if row.auto_champion == auto_champion.value
+            and row.notes == notes
+            and (row.preferences or {}) == (preferences or {})
+            and (player_id is None or (row.player is not None and row.player.id == player_id))
+        ]
+        if existing and not matches:
+            raise ValueError(
+                "An existing submission for this player, league, and version has different options; "
+                f"inspect submission {existing[0].id}"
+            )
+        if matches:
+            submission = matches[0]
+        else:
+            submission = client.submit_to_league(
+                league_id,
+                policy_version.id,
+                auto_champion=auto_champion,
+                preferences=preferences,
+                player_id=player_id,
+                notes=notes,
+                request_id=request_id,
+            )
+    if json_output:
+        emit_json({**submission.model_dump(mode="json"), "request_id": request_id, "reconciled": bool(matches)})
+        return
 
     placement_runs_async = submission.status in {"pending", "processing"}
     policy_path = f"/policies/versions/{policy_version.id}"

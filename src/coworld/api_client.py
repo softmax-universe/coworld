@@ -1,24 +1,41 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, computed_field
 
 from coworld.config import list_page_payload
 from softmax_client import credentials as softmax_credentials
-from softmax_client.agent import user_agent
-from softmax_client.rate_limits import RateLimitTransport
+from softmax_client.http import is_managed_api_server, observatory_client
 
 
-def _query_params(**values: str | int | UUID | list[str] | None) -> dict[str, str | int | list[str]]:
+def _query_params(**values: str | int | float | UUID | list[str] | None) -> dict[str, str | int | float | list[str]]:
     """Omit absent filters while retaining empty values, false flags and field order."""
     return {key: str(value) if isinstance(value, UUID) else value for key, value in values.items() if value is not None}
+
+
+def parse_policy_identifier(identifier: str, *, allow_at_version: bool = False) -> tuple[str, int | None]:
+    if not identifier:
+        raise ValueError("Policy name must not be empty")
+    if ":" in identifier:
+        name, version_text = identifier.rsplit(":", 1)
+        version_text = version_text.removeprefix("v")
+    else:
+        if not allow_at_version:
+            return identifier, None
+        name, separator, version_text = identifier.rpartition("@")
+        if not separator or not version_text.isdecimal():
+            return identifier, None
+    if not name or not version_text.isdecimal() or int(version_text) <= 0:
+        raise ValueError(f"Invalid policy version: {identifier}")
+    return name, int(version_text)
 
 
 class CoworldAPIModel(BaseModel):
@@ -245,6 +262,7 @@ class LeagueSubmissionPublic(CoworldAPIModel):
     player: PlayerPublic | None = None
     league_policy_membership_id: str | None = None
     notes: str | None = None
+    preferences: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -808,6 +826,8 @@ class PolicyVersionRow(CoworldAPIModel):
     id: UUID
     name: str
     version: int
+    policy_id: UUID | None = None
+    player_id: str | None = None
 
 
 class PolicyVersionsResponse(CoworldAPIModel):
@@ -961,15 +981,9 @@ class CoworldHttpClient:
 
     def __init__(self, *, server_url: str, token: str | None = None):
         self._server_url = server_url.rstrip("/")
-        base_url = f"{self._server_url}/observatory"
-        self._http_client = httpx.Client(
-            base_url=base_url,
-            headers={"User-Agent": user_agent("coworld")},
-            timeout=30.0,
-            follow_redirects=self._follow_redirects,
-            transport=RateLimitTransport(),
-        )
-        self._token = token
+        self._token = None if is_managed_api_server(server_url) else token
+        self._http_client = observatory_client(server=server_url, token=self._token, timeout=30.0, product="coworld")
+        self._http_client.follow_redirects = self._follow_redirects
 
     @staticmethod
     def set_elevated(elevated: bool) -> None:
@@ -977,6 +991,8 @@ class CoworldHttpClient:
 
     @classmethod
     def from_login(cls, *, server_url: str) -> Self:
+        if is_managed_api_server(server_url):
+            return cls(server_url=server_url)
         token = softmax_credentials.load_current_token(server=server_url)
         if token is None:
             raise RuntimeError(f"Not authenticated. Run: uv run softmax login --server {server_url}")
@@ -1325,18 +1341,24 @@ class CoworldApiClient(CoworldHttpClient):
         player_id: str | None = None,
         policy_version_id: UUID | None = None,
         mine: bool = False,
+        game_name: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        request_id: str | None = None,
     ) -> LeagueSubmissionPage:
         params = _query_params(
             mine=str(mine).lower(),
             league_id=league_id,
             player_id=player_id,
             policy_version_id=policy_version_id,
+            game_name=game_name,
             limit=limit,
             cursor=cursor,
         )
-        return self._get_page("/v2/league-submissions", LeagueSubmissionPage, LeagueSubmissionPublic, params=params)
+        headers = {"X-Cogent-Request-Id": request_id} if request_id is not None else {}
+        return self._get_page(
+            "/v2/league-submissions", LeagueSubmissionPage, LeagueSubmissionPublic, params=params, headers=headers
+        )
 
     def submit_to_league(
         self,
@@ -1346,6 +1368,8 @@ class CoworldApiClient(CoworldHttpClient):
         auto_champion: AutoChampion = AutoChampion.always,
         preferences: dict[str, Any] | None = None,
         player_id: str | None = None,
+        notes: str | None = None,
+        request_id: str | None = None,
     ) -> LeagueSubmissionPublic:
         payload: dict[str, Any] = {
             "league_id": league_id,
@@ -1354,6 +1378,8 @@ class CoworldApiClient(CoworldHttpClient):
         }
         if preferences is not None:
             payload["preferences"] = preferences
+        if notes is not None:
+            payload["notes"] = notes
         # The server resolves an omitted player_id to the account's default player;
         # naming one submits as that player instead (it must belong to the caller).
         if player_id is not None:
@@ -1362,6 +1388,7 @@ class CoworldApiClient(CoworldHttpClient):
             "/v2/league-submissions",
             LeagueSubmissionPublic,
             json=payload,
+            headers={"X-Cogent-Request-Id": request_id or str(uuid4())},
             timeout=120.0,
         )
 
@@ -1448,8 +1475,19 @@ class CoworldApiClient(CoworldHttpClient):
         params = None if include is None else {"include": ",".join(include)}
         return self.get_bytes(f"/v2/episode-requests/{episode_request_id}/bundle", params=params)
 
-    def create_experience_request(self, body: dict[str, Any]) -> ExperienceRequestDetail:
-        return self._post("/v2/experience-requests", ExperienceRequestDetail, json=body, timeout=120.0)
+    def create_experience_request(
+        self, body: dict[str, Any], *, request_id: str | None = None
+    ) -> ExperienceRequestDetail:
+        request_id = request_id or str(body["idempotency_key"] if "idempotency_key" in body else uuid4())
+        if "idempotency_key" not in body:
+            body = {**body, "idempotency_key": request_id}
+        return self._post(
+            "/v2/experience-requests",
+            ExperienceRequestDetail,
+            json=body,
+            headers={"X-Cogent-Request-Id": request_id},
+            timeout=120.0,
+        )
 
     def list_experience_requests(
         self,
@@ -1630,10 +1668,68 @@ class CoworldApiClient(CoworldHttpClient):
     def get_reporter(self, reporter_id: str) -> ReporterDetailPublic:
         return self._get(f"/v2/reporters/{reporter_id}", ReporterDetailPublic)
 
-    def lookup_policy_version(self, *, name: str, version: int | None = None) -> PolicyVersionRow | None:
-        params = _query_params(mine="true", name_exact=name, limit=100, version=version)
-        response = self._get("/stats/policy-versions", PolicyVersionsResponse, params=params)
-        return response.entries[0] if response.entries else None
+    def list_policy_versions(
+        self,
+        *,
+        mine: bool = False,
+        name: str | None = None,
+        version: int | None = None,
+        player_id: str | None = None,
+        policy_version_id: UUID | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> PolicyVersionsResponse:
+        params = _query_params(
+            mine=str(mine).lower(),
+            name_exact=name,
+            version=version,
+            player_id=player_id,
+            policy_version_ids=[str(policy_version_id)] if policy_version_id is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
+        return self._get("/stats/policy-versions", PolicyVersionsResponse, params=params)
+
+    def lookup_policy_version(
+        self, *, name: str, version: int | None = None, player_id: str | None = None, mine: bool = True
+    ) -> PolicyVersionRow | None:
+        rows: list[PolicyVersionRow] = []
+        cursor = None
+        while True:
+            page = self.list_policy_versions(
+                mine=mine, name=name, version=version, player_id=player_id, limit=200, cursor=cursor
+            )
+            rows.extend(page.entries)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        if not rows:
+            return None
+        identities = {(row.policy_id, row.player_id) for row in rows}
+        if len(identities) > 1:
+            choices = ", ".join(f"{row.id} (player {row.player_id or 'unassigned'})" for row in rows)
+            raise ValueError(f"Ambiguous policy {name!r}; use --player or a version UUID: {choices}")
+        return max(rows, key=lambda row: row.version)
+
+    def resolve_policy_version(
+        self, ref: str, *, player_id: str | None = None, mine: bool = True, allow_at_version: bool = False
+    ) -> PolicyVersionRow:
+        if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", ref):
+            if not mine:
+                row = self._get(f"/stats/policy-versions/{UUID(ref)}", PolicyVersionRow)
+                if player_id is None or row.player_id == player_id:
+                    return row
+                raise ValueError(f"Policy version {ref} does not belong to player {player_id}")
+            page = self.list_policy_versions(mine=mine, policy_version_id=UUID(ref), player_id=player_id)
+            if len(page.entries) == 1:
+                return page.entries[0]
+        else:
+            name, version = parse_policy_identifier(ref, allow_at_version=allow_at_version)
+            row = self.lookup_policy_version(name=name, version=version, player_id=player_id, mine=mine)
+            if row is not None:
+                return row
+        scope = "Owned" if mine else "Visible"
+        raise ValueError(f"{scope} policy version not found: {ref}")
 
     def create_counterfactual_eval(
         self,
@@ -1680,6 +1776,9 @@ def _detail(response: httpx.Response) -> str | None:
 
 
 def _raise_for_status(response: httpx.Response) -> None:
+    if response.is_success:
+        return
+    response.read()
     if response.status_code == 429 and response.headers.get("X-RateLimit-Outcome") == "rejected":
         raise httpx.HTTPStatusError(
             f"API budget exceeded (429) for {response.request.url.path}: {response.text}",

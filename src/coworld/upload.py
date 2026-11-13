@@ -11,17 +11,19 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, Literal, Self
 from urllib.parse import quote, urlparse
+from uuid import uuid4
 
 import httpx
 import typer
@@ -31,6 +33,7 @@ from coworld.agent_guidance import update_agent_guidance
 from coworld.api_client import CoworldApiClient, LeaguePublic, _detail
 from coworld.bundle import resolve_registry_image_ref
 from coworld.certifier import EXECUTABLE_TRANSCRIPT_PATH, certify_coworld, load_coworld_package
+from coworld.cli_support import emit_json
 from coworld.config import (
     DEFAULT_SUBMIT_SERVER,
     DOCS_PAGES,
@@ -49,7 +52,6 @@ from coworld.runner.gpu_batch import SharedInferenceModel
 from coworld.runner.runner import assert_docker_image_reachable
 from coworld.types import MANIFEST_ROLE_SECTIONS, CoworldPlayerStartup, CoworldRunnableResources
 from softmax.docs import DOCS_AGENT_INDEX_URL, DOCS_AGENT_SKILL_URL
-from softmax_client.agent import user_agent
 
 _LOCAL_TAG_SEPARATOR_RE = re.compile(r"[^a-z0-9._-]+")
 _IMAGE_ID_RE = re.compile(r"^img_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -179,11 +181,11 @@ class PolicyVersionResponse(BaseModel):
     version: int
     pools: list[str] | None = None
     submit_error: str | None = None
+    player_id: str | None = None
 
 
-class PlayerFilePolicyUploadResponse(BaseModel):
-    upload_url: str | None = None
-    existing_policy_version: PolicyVersionResponse | None = None
+class FilePolicyVersionResponse(PolicyVersionResponse):
+    player_id: str
 
 
 class CoworldPlayerFileUploadResponse(BaseModel):
@@ -467,7 +469,7 @@ class CoworldStatusResult:
 class CoworldUploadClient(PolicySourceClient):
     _follow_redirects = False
 
-    def __init__(self, server_url: str, token: str):
+    def __init__(self, server_url: str, token: str | None = None):
         super().__init__(server_url=server_url, token=token)
 
     def _check_response(self, response: httpx.Response) -> None:
@@ -975,10 +977,14 @@ class CoworldUploadClient(PolicySourceClient):
             timeout=120.0,
         )
 
-    def lookup_policy_upload(self, inputs: dict[str, Any]) -> PolicyVersionResponse | None:
-        response = self._http_client.post(
+    def lookup_policy_upload(
+        self, inputs: dict[str, Any], *, request_id: str | None = None
+    ) -> PolicyVersionResponse | None:
+        headers = {"X-Cogent-Request-Id": request_id} if request_id is not None else {}
+        response = self._response(
+            "POST",
             "/stats/policies/lookup",
-            headers=self._headers(),
+            headers=headers,
             json=inputs,
             timeout=30.0,
         )
@@ -986,48 +992,28 @@ class CoworldUploadClient(PolicySourceClient):
         value = response.json()
         return PolicyVersionResponse.model_validate(value) if value is not None else None
 
-    def request_player_file_upload(
+    def upload_player_file_policy(
         self,
         *,
+        contents: bytes,
         name: str | None,
-        content_hash: str,
-        size_bytes: int,
-        tags: dict[str, str] | None,
-    ) -> PlayerFilePolicyUploadResponse:
-        response = self._response(
-            "POST",
-            "/stats/policies/files/upload",
-            json={
-                **({"name": name} if name is not None else {}),
-                "content_hash": content_hash,
-                "size_bytes": size_bytes,
-                "tags": tags or {},
-            },
-            timeout=120.0,
-        )
-        if response.status_code == 409:
-            return PlayerFilePolicyUploadResponse()
-        self._check_response(response)
-        return PlayerFilePolicyUploadResponse.model_validate(response.json())
-
-    def complete_player_file_policy(
-        self,
-        *,
-        name: str | None,
-        content_hash: str,
-        size_bytes: int,
-        tags: dict[str, str] | None,
+        player_id: str | None,
+        attributes: dict[str, Any],
+        tags: dict[str, str],
+        request_id: str,
     ) -> PolicyVersionResponse:
+        data = {"attributes": json.dumps(attributes), "tags": json.dumps(tags)}
+        if name is not None:
+            data["name"] = name
+        if player_id is not None:
+            data["player_id"] = player_id
         return self._post(
-            "/stats/policies/files/complete",
+            "/stats/policies/files/content",
             PolicyVersionResponse,
-            json={
-                **({"name": name} if name is not None else {}),
-                "content_hash": content_hash,
-                "size_bytes": size_bytes,
-                "tags": tags or {},
-            },
-            timeout=120.0,
+            data=data,
+            files={"file": ("player-file", contents, _PLAYER_FILE_CONTENT_TYPE)},
+            headers={"X-Cogent-Request-Id": request_id},
+            timeout=600.0,
         )
 
 
@@ -1711,11 +1697,19 @@ def upload_policy_cmd(
     server: str = DEFAULT_SUBMIT_SERVER,
     source: Path | None = None,
     source_entry_paths: list[str] | None = None,
+    player_id: str | None = None,
+    attributes: dict[str, Any] | None = None,
+    json_output: bool = False,
+    request_id: str | None = None,
 ) -> None:
     if (image is None) == (player_file is None):
         raise ValueError("Exactly one of image or player_file is required")
     if source is not None and player_file is not None:
         raise ValueError("--source accompanies an image; --file already uploads its own bytes")
+    if player_file is None and (player_id is not None or attributes is not None):
+        raise ValueError("--player and --attributes currently require --file")
+    reconciled = False
+    request_id = request_id or str(uuid4())
     with CoworldUploadClient.from_login(server_url=server) as client:
         attachment = client.stage_policy_source(source, entry_paths=source_entry_paths) if source is not None else None
         if player_file is not None:
@@ -1725,29 +1719,38 @@ def upload_policy_cmd(
                 )
             contents = player_file_bytes(player_file)
             content_hash = hashlib.sha256(contents).hexdigest()
-            upload = client.request_player_file_upload(
-                name=name,
-                content_hash=content_hash,
-                size_bytes=len(contents),
-                tags=tags,
-            )
-            if upload.existing_policy_version is None and upload.upload_url is not None:
-                response = httpx.put(
-                    upload.upload_url,
-                    content=contents,
-                    headers={"Content-Type": _PLAYER_FILE_CONTENT_TYPE},
-                    timeout=600.0,
+            identity = {
+                "attributes": attributes or {},
+                "tags": tags or {},
+                "file_hash": content_hash,
+                "file_size": len(contents),
+            }
+            result = None
+            if name is not None and player_id is not None:
+                result = client.lookup_policy_upload(
+                    {"name": name, "player_id": player_id, **identity}, request_id=request_id
                 )
-                response.raise_for_status()
-            result = client.complete_player_file_policy(
-                name=name,
-                content_hash=content_hash,
-                size_bytes=len(contents),
-                tags=tags,
+                reconciled = result is not None
+            if result is None:
+                result = client.upload_player_file_policy(
+                    contents=contents,
+                    name=name,
+                    player_id=player_id,
+                    attributes=attributes or {},
+                    tags=tags or {},
+                    request_id=request_id,
+                )
+            published_player_id = FilePolicyVersionResponse.model_validate(result.model_dump()).player_id
+            confirmed = client.lookup_policy_upload(
+                {"name": result.name, "player_id": published_player_id, **identity}, request_id=request_id
             )
+            if confirmed is None or confirmed.id != result.id:
+                raise RuntimeError("Published file policy readback did not confirm the original upload inputs")
+
         else:
             assert image is not None
-            uploaded_image = _upload_container_image(client, image)
+            with redirect_stdout(sys.stderr) if json_output else nullcontext():
+                uploaded_image = _upload_container_image(client, image)
             result = client.complete_docker_image_policy(
                 name=name,
                 container_image_id=uploaded_image.id,
@@ -1763,6 +1766,20 @@ def upload_policy_cmd(
             observed = client.policy_source(result.id)
             if observed.content_hash != attachment.upload.content_hash:
                 raise RuntimeError("Published source readback does not match the uploaded archive")
+    if json_output:
+        receipt = {**result.model_dump(mode="json"), "request_id": request_id, "reconciled": reconciled}
+        if player_file is not None:
+            receipt.update(
+                content_hash=content_hash,
+                size_bytes=len(contents),
+                player_id=published_player_id,
+                attributes=attributes or {},
+                tags=tags or {},
+            )
+        if attachment is not None:
+            receipt["source_content_hash"] = attachment.upload.content_hash
+        emit_json(receipt)
+        return
     if name is None:
         typer.echo(f"Policy name: {result.name} (your player's name; pass --name to choose another)")
     typer.echo(f"Upload complete: {result.name}:v{result.version}")
@@ -1824,14 +1841,14 @@ def download_coworld(
 ) -> CoworldUploadResponse:
     coworld_id = resolve_coworld_download_id(coworld_ref, server=server)
 
-    with httpx.Client(
-        base_url=f"{server.rstrip('/')}/observatory",
-        headers={"User-Agent": user_agent("coworld")},
-        timeout=30.0,
-    ) as http_client:
-        response = http_client.get(f"/v2/coworlds/{coworld_id}", timeout=120.0)
-    response.raise_for_status()
-    return CoworldUploadResponse.model_validate(response.json())
+    with CoworldUploadClient(server_url=server) as client:
+        coworld = client.get_coworld(coworld_id)
+    manifest_bytes = json.dumps(coworld.manifest, sort_keys=True, separators=(",", ":")).encode()
+    if len(manifest_bytes) != coworld.size_bytes:
+        raise ValueError("Downloaded Coworld manifest has an unexpected size")
+    if f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}" != coworld.manifest_hash:
+        raise ValueError("Downloaded Coworld manifest failed its SHA-256 check")
+    return coworld
 
 
 def resolve_coworld_download_id(
@@ -1842,7 +1859,7 @@ def resolve_coworld_download_id(
     if coworld_ref.startswith("cow_"):
         return coworld_ref
 
-    with CoworldUploadClient.from_login(server_url=server) as client:
+    with CoworldUploadClient(server_url=server) as client:
         coworld = client.find_canonical_coworld(coworld_ref)
     if coworld is None:
         raise RuntimeError(f"Canonical Coworld not found: {coworld_ref}")
@@ -1882,11 +1899,7 @@ def _download_coworld_player_files(
     manifest = copy.deepcopy(coworld.manifest)
     files_dir = downloaded_coworld_player_files_path(output_dir, coworld.id)
     downloaded: dict[str, str] = {}
-    with httpx.Client(
-        base_url=f"{server.rstrip('/')}/observatory",
-        headers={"User-Agent": user_agent("coworld")},
-        timeout=120.0,
-    ) as http_client:
+    with CoworldApiClient(server_url=server) as client:
         for player in manifest.get("player") or []:
             reference = player.get("file")
             if reference is None:
@@ -1894,10 +1907,10 @@ def _download_coworld_player_files(
             if not reference.startswith("sha256:"):
                 raise ValueError(f"Published Coworld player file is not content-addressed: {reference}")
             content_hash = reference.removeprefix("sha256:")
+            if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+                raise ValueError(f"Published Coworld player file has an invalid digest: {reference}")
             if content_hash not in downloaded:
-                response = http_client.get(f"/v2/coworlds/{coworld.id}/player-files/{content_hash}")
-                response.raise_for_status()
-                contents = response.content
+                contents = client.get_bytes(f"/v2/coworlds/{coworld.id}/player-files/{content_hash}", timeout=120.0)
                 if hashlib.sha256(contents).hexdigest() != content_hash:
                     raise ValueError(f"Downloaded Coworld player file does not match sha256:{content_hash}")
                 files_dir.mkdir(parents=True, exist_ok=True)

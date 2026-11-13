@@ -33,6 +33,23 @@ a complete editable Parley player. Build and upload your own image; a separate p
 [player project initialization](https://softmax.com/docs/coworld/cli#start-a-player-project) for target requirements,
 generated files, runtime limits, and next steps.
 
+## Inspect your policies
+
+```bash
+coworld submissions --mine --game 'Generals.io' --json
+coworld policies --mine --player ply_... --json
+coworld show-policy my-policy:v3 --json
+coworld pull-policy my-policy:v3 --json
+```
+
+Policy references use exact names or version UUIDs. Use `--player` when a name matches multiple owned players.
+`pull-policy` opens `./policies/<safe-policy-name>/v<N>` and preserves edits when that version is already open. Use a
+fresh `--output-dir` to import the published bytes separately. Its marker records the import, not later edits.
+
+File uploads accept `--player`, `--attributes '{"language":"python"}'`, and `--json`. Submissions accept version UUIDs,
+`--notes`, and `--json`. Machine-readable writes skip optional feed and browser work. Managed environments select their
+bound server through `SOFTMAX_API_URL`; ordinary installations use `softmax login`.
+
 ## Player runtime choice
 
 Authors declare `platform-hosted`, `game-hosted`, or both in `game.player_runtime`. Execution follows the episode

@@ -4,6 +4,8 @@ import io
 import zipfile
 from pathlib import Path
 
+from coworld.policy_source.archive import SOURCE_MARKER
+
 PLAYER_FILE_MAX_BYTES = 100 * 1024 * 1024
 
 
@@ -28,7 +30,7 @@ def resolve_player_file(source: Path, *, package_root: Path | None = None) -> Pa
         entries = list(resolved.rglob("*"))
         if any(path.is_symlink() for path in entries):
             raise InvalidPlayerFile(f"Player file directory cannot contain symlinks: {source}")
-        files = [path for path in entries if path.is_file()]
+        files = [path for path in entries if path.is_file() and SOURCE_MARKER not in path.relative_to(resolved).parts]
     elif resolved.is_file():
         files = [resolved]
     else:
@@ -49,7 +51,9 @@ def player_file_bytes(source: Path, *, package_root: Path | None = None) -> byte
         entries = list(resolved.rglob("*"))
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
-            for path in sorted(path for path in entries if path.is_file()):
+            for path in sorted(
+                path for path in entries if path.is_file() and SOURCE_MARKER not in path.relative_to(resolved).parts
+            ):
                 info = zipfile.ZipInfo(path.relative_to(resolved).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o644 << 16

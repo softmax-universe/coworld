@@ -3,8 +3,9 @@ from typing import Any
 import httpx
 
 from softmax.docs import DOCS_URL
+from softmax_client.auth import get_api_server
 
-DEFAULT_SUBMIT_SERVER = "https://softmax.com/api"
+DEFAULT_SUBMIT_SERVER = get_api_server()
 
 
 def participation_guide_url(server: str, league_id: str) -> str:

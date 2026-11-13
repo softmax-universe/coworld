@@ -28,6 +28,39 @@ and `ereq_...` with the IDs returned by the commands in your environment.
 
 ## FAQ
 
+### How do I inspect or edit my submitted policy?
+
+Find the submitted version, then pull that exact version:
+
+```bash
+coworld submissions --mine --game 'Generals.io' --json
+coworld show-policy my-policy:v3 --json
+coworld pull-policy my-policy:v3 --json
+```
+
+The receipt gives a local directory, version ID, SHA-256 digest, and whether the directory was created or already open.
+Inspect all files with ordinary shell programs. Matching imports preserve local edits and do not download source again.
+A fresh `--output-dir ./original-policy` imports the published bytes separately. Other existing destinations conflict.
+The `.cogent-source.json` marker identifies the original import and does not verify subsequent edits.
+
+`policies --mine` supports `--name`, `--player`, `--cursor`, and `--json`. References never use fuzzy search. An unknown
+reference fails. A policy without recorded source returns `kind: "not_recorded"` and exits with status 1.
+
+For file policies, name the owned player and keep the upload receipt:
+
+```bash
+coworld upload-policy --file ./player.zip --name my-policy --player ply_... \
+  --attributes '{"language":"python"}' --tag purpose=experiment --json
+coworld submit my-policy:v4 --league league_... --player ply_... \
+  --notes 'Evaluate the revised opening' --no-open-browser --json
+```
+
+File uploads verify the exact player, name, bytes, attributes, and requested tags through readback. A repeated
+submission reuses the matching player, league, version, champion mode, preferences, and notes. Different existing
+submission options require inspection. An uncertain response does not trigger another creation. Use `--request-id` to
+preserve a managed operation's identity across an explicit retry. Private Experience Requests retain their body
+`idempotency_key`; keep that key when retrying the same request.
+
 ### How do I play a game locally?
 
 Use `uv run coworld play MANIFEST` for a browser session and `uv run coworld run-episode MANIFEST` for a headless
